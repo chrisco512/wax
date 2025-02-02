@@ -11,7 +11,7 @@ pub fn build(b: *Build) void {
     const optimize = .ReleaseSmall;
 
     _ = b.addModule("wax", .{
-        .root_source_file = b.path("src/wax.zig"), 
+        .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
     });
