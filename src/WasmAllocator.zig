@@ -44,6 +44,7 @@ var next_addrs = [1]usize{0} ** size_class_count;
 var frees = [1]usize{0} ** size_class_count;
 /// For each big size class, points to the freed pointer.
 var big_frees = [1]usize{0} ** big_size_class_count;
+var current_memory_addr: usize = wasm.page_size;
 
 fn alloc(ctx: *anyopaque, len: usize, log2_align: u8, return_address: usize) ?[*]u8 {
     _ = ctx;
@@ -161,6 +162,7 @@ fn allocBigPages(n: usize) usize {
     }
 
     pay_for_memory_grow(pow2_pages * pages_per_bigpage);
-    const addr = wasm.page_size;
+    const addr = current_memory_addr;
+    current_memory_addr = slot_size_bytes + current_memory_addr;
     return addr;
 }

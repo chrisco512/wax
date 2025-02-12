@@ -17,24 +17,18 @@ export fn user_entrypoint(len: usize) i32 {
         @panic("Incorect input length");
     }
     const selector = input[0..4];
-    const target = [4]u8{ 0x12, 0x34, 0x56, 0x78 };
-    // const r = &target;
-    const matches = std.mem.eql(u8, selector, &target);
-    // if selector
-    if (matches) {
-        // const out = [4]u8{ 0x34, 0x34, 0x56, 0x78 };
-        selector[0] = 0x56;
-        const slot = [1]u8{0x34};
-        const slot_1 = slot[0..];
-        storage_cache_bytes32(@ptrCast(slot_1), @ptrCast(selector));
-        // const out_data = out[0..4];
-        const out = block_number();
-        var bytes: [8]u8 = undefined;
-        std.mem.writeInt(u64, &bytes, out, .little);
-        storage_flush_cache(true);
-        utils.write_output(&bytes);
+    const data = input[4..];
+    if (selector[0] == 0x01) {
+        const padded_key: []u8 = utils.leftPad(selector[1..4], 32) catch return 1;
+        const result = utils.read_storage(padded_key) catch return 1;
+        utils.write_output(result);
+    } else if (selector[0] == 0x02) {
+        const padded_key: []u8 = utils.leftPad(selector[1..4], 32) catch return 1;
+        utils.write_storage(padded_key, data) catch return 1;
     } else {
-        utils.write_output(selector);
+        const padded_key: []u8 = utils.leftPad(selector[1..4], 32) catch return 1;
+        input[0] = 0x99;
+        utils.write_output(padded_key);
     }
 
     return 0;

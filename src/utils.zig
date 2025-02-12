@@ -6,9 +6,10 @@ const decoder = zabi.decoding.abi_decoder;
 pub extern "vm_hooks" fn read_args(dest: *u8) void;
 pub extern "vm_hooks" fn write_result(data: *const u8, len: usize) void;
 pub extern "vm_hooks" fn storage_cache_bytes32(key: *const u8, value: *const u8) void;
-pub extern "vm_hooks" fn block_number() u64;
 pub extern "vm_hooks" fn storage_flush_cache(clear: bool) void;
+pub extern "vm_hooks" fn storage_load_bytes32(key: *const u8, dest: *u8) void;
 pub extern "vm_hooks" fn native_keccak256(bytes: *const u8, len: usize, output: *u8) void;
+pub extern "vm_hooks" fn block_number() u64;
 
 // Standard ERC20 function selectors (first 4 bytes of keccak256 hash of function signatures)
 const TOTAL_SUPPLY_SELECTOR = [_]u8{ 0x18, 0x16, 0x0d, 0xdd }; // totalSupply()
@@ -47,12 +48,26 @@ pub fn write_output(data: []u8) void {
     write_result(@ptrCast(data), data.len);
 }
 
-pub fn write_storage(key: []u8, value: []u8) void {
+// For slices
+pub fn leftPad(slice: []u8, size: usize) ![]u8 {
+    const output = try allocator.alloc(u8, size);
+    const padding = size - slice.len;
+    std.mem.copyForwards(u8, output[padding..], slice);
+    return output;
+}
+
+pub fn read_storage(key: []u8) ![]u8 {
+    const output = try allocator.alloc(u8, 32);
+    storage_load_bytes32(@ptrCast(key), @ptrCast(output));
+    return output;
+}
+
+pub fn write_storage(key: []u8, value: []u8) !void {
     storage_cache_bytes32(@ptrCast(key), @ptrCast(value));
     storage_flush_cache(true);
 }
 
-pub fn router_method(selector: [4]u8) void {
+pub fn method_router(selector: [4]u8) void {
     switch (@as(u32, selector[0]) << 24 | @as(u32, selector[1]) << 16 | @as(u32, selector[2]) << 8 | @as(u32, selector[3])) {
         @as(u32, TOTAL_SUPPLY_SELECTOR[0]) << 24 | @as(u32, TOTAL_SUPPLY_SELECTOR[1]) << 16 | @as(u32, TOTAL_SUPPLY_SELECTOR[2]) << 8 | @as(u32, TOTAL_SUPPLY_SELECTOR[3]) => {
             // try stdout.print("totalSupply called\n", .{});
@@ -76,13 +91,19 @@ pub fn router_method(selector: [4]u8) void {
             // Add approve logic here
         },
         @as(u32, TRANSFER_FROM_SELECTOR[0]) << 24 | @as(u32, TRANSFER_FROM_SELECTOR[1]) << 16 | @as(u32, TRANSFER_FROM_SELECTOR[2]) << 8 | @as(u32, TRANSFER_FROM_SELECTOR[3]) => {
-            // try stdout.print("transferFrom called\n", .{});
             // Add transferFrom logic here
         },
-        else => {
-            // try stdout.print("Unknown function selector\n", .{});
-        },
+        else => {},
     }
+}
+
+pub fn get_balance_slot(owner: []const u8) []u8 {
+    return compute_mapping_slot(owner, SLOTS.BALANCES);
+}
+
+pub fn get_allowance_slot(owner: []const u8, spender: []const u8) []u8 {
+    const spender_slot = compute_mapping_slot(spender, SLOTS.ALLOWANCES);
+    return compute_mapping_slot(owner, std.mem.bytesToValue(u256, spender_slot));
 }
 
 pub fn keccak256(data: []u8) ![]u8 {
@@ -93,7 +114,7 @@ pub fn keccak256(data: []u8) ![]u8 {
 
 pub fn compute_mapping_slot(key: []const u8, slot: u256) []u8 {
     var concat: [64]u8 = undefined;
-    std.mem.copy(u8, concat[0..32], key);
-    std.mem.copy(u8, concat[32..64], &slot);
+    std.mem.copyForwards(u8, concat[0..32], key);
+    std.mem.copyForwards(u8, concat[32..64], &slot);
     return keccak256(concat[0..]);
 }
