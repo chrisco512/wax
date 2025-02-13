@@ -1,5 +1,6 @@
 const std = @import("std");
 const WasmAllocator = @import("WasmAllocator.zig");
+const erc20 = @import("erc20.zig");
 const zabi = @import("zabi");
 const decoder = zabi.decoding.abi_decoder;
 
@@ -12,7 +13,8 @@ pub extern "vm_hooks" fn native_keccak256(bytes: *const u8, len: usize, output: 
 pub extern "vm_hooks" fn block_number() u64;
 
 // Standard ERC20 function selectors (first 4 bytes of keccak256 hash of function signatures)
-const TOTAL_SUPPLY_SELECTOR = [_]u8{ 0x18, 0x16, 0x0d, 0xdd }; // totalSupply()
+const INITIATE_SELECTOR = [_]u8{ 0x79, 0x01, 0xea, 0x78 }; // initiate(uint256) 0x7901ea78
+const TOTAL_SUPPLY_SELECTOR = [_]u8{ 0x18, 0x16, 0x0d, 0xdd }; // totalSupply() 0x18160ddd
 const BALANCE_OF_SELECTOR = [_]u8{ 0x70, 0xa0, 0x82, 0x31 }; // balanceOf(address)
 const TRANSFER_SELECTOR = [_]u8{ 0xa9, 0x05, 0x9c, 0xbb }; // transfer(address,uint256)
 const ALLOWANCE_SELECTOR = [_]u8{ 0xdd, 0x62, 0xed, 0x3e }; // allowance(address,address)
@@ -21,12 +23,12 @@ const TRANSFER_FROM_SELECTOR = [_]u8{ 0x23, 0xb8, 0x72, 0xdd }; // transferFrom(
 
 // Storage slots
 pub const SLOTS = struct {
-    pub const NAME = 0;
-    pub const SYMBOL = 1;
-    pub const DECIMALS = 2;
-    pub const TOTAL_SUPPLY = 3;
-    pub const BALANCES = 4;
-    pub const ALLOWANCES = 5;
+    pub const NAME: [32]u8 = .{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x01 };
+    pub const SYMBOL: [32]u8 = .{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x02 };
+    pub const DECIMALS: [32]u8 = .{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x03 };
+    pub const TOTAL_SUPPLY: [32]u8 = .{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x04 };
+    pub const BALANCES: [32]u8 = .{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x05 };
+    pub const ALLOWANCES: [32]u8 = .{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x06 };
 };
 
 // Uses our custom WasmAllocator which is a simple modification over the wasm allocator
@@ -63,15 +65,31 @@ pub fn read_storage(key: []u8) ![]u8 {
 }
 
 pub fn write_storage(key: []u8, value: []u8) !void {
-    storage_cache_bytes32(@ptrCast(key), @ptrCast(value));
+    const value_to_set = try leftPad(value, 32);
+    storage_cache_bytes32(@ptrCast(key), @ptrCast(value_to_set));
     storage_flush_cache(true);
 }
 
-pub fn method_router(selector: [4]u8) void {
+pub fn bytesToU256(bytes: []const u8) !u256 {
+    if (bytes.len > 32) return error.InvalidLength;
+
+    var padded: [32]u8 = [_]u8{0} ** 32;
+    // Right-align the bytes for big numbers
+    const start = 32 - bytes.len;
+    std.mem.copyForwards(u8, padded[start..], bytes);
+
+    return std.mem.readInt(u256, &padded, .big);
+}
+
+pub fn method_router(selector: [4]u8, data: []u8) !void {
+    // _ = data;
     switch (@as(u32, selector[0]) << 24 | @as(u32, selector[1]) << 16 | @as(u32, selector[2]) << 8 | @as(u32, selector[3])) {
+        @as(u32, INITIATE_SELECTOR[0]) << 24 | @as(u32, INITIATE_SELECTOR[1]) << 16 | @as(u32, INITIATE_SELECTOR[2]) << 8 | @as(u32, INITIATE_SELECTOR[3]) => {
+            try erc20.initate(data);
+        },
         @as(u32, TOTAL_SUPPLY_SELECTOR[0]) << 24 | @as(u32, TOTAL_SUPPLY_SELECTOR[1]) << 16 | @as(u32, TOTAL_SUPPLY_SELECTOR[2]) << 8 | @as(u32, TOTAL_SUPPLY_SELECTOR[3]) => {
-            // try stdout.print("totalSupply called\n", .{});
-            // Add totalSupply logic here
+            const total_supply = try erc20.totalSupply();
+            write_output(total_supply);
         },
         @as(u32, BALANCE_OF_SELECTOR[0]) << 24 | @as(u32, BALANCE_OF_SELECTOR[1]) << 16 | @as(u32, BALANCE_OF_SELECTOR[2]) << 8 | @as(u32, BALANCE_OF_SELECTOR[3]) => {
             // const decoded = try decoder.decodeAbiFunction([20]u8, allocator, encoded, .{});

@@ -16,20 +16,23 @@ export fn user_entrypoint(len: usize) i32 {
     if (input.len < 4) {
         @panic("Incorect input length");
     }
-    const selector = input[0..4];
+    const selector: [4]u8 = input[0..4].*; // Cast slice to fixed array
+    // utils.write_output(&selector);
     const data = input[4..];
-    if (selector[0] == 0x01) {
-        const padded_key: []u8 = utils.leftPad(selector[1..4], 32) catch return 1;
-        const result = utils.read_storage(padded_key) catch return 1;
-        utils.write_output(result);
-    } else if (selector[0] == 0x02) {
-        const padded_key: []u8 = utils.leftPad(selector[1..4], 32) catch return 1;
-        utils.write_storage(padded_key, data) catch return 1;
-    } else {
-        const padded_key: []u8 = utils.leftPad(selector[1..4], 32) catch return 1;
-        input[0] = 0x99;
-        utils.write_output(padded_key);
-    }
+    utils.method_router(selector, data) catch return 1;
+
+    // if (selector[0] == 0x01) {
+    //     const padded_key: []u8 = utils.leftPad(selector[1..4], 32) catch return 1;
+    //     const result = utils.read_storage(padded_key) catch return 1;
+    //     utils.write_output(result);
+    // } else if (selector[0] == 0x02) {
+    //     const padded_key: []u8 = utils.leftPad(selector[1..4], 32) catch return 1;
+    //     utils.write_storage(padded_key, data) catch return 1;
+    // } else {
+    //     const padded_key: []u8 = utils.leftPad(selector[1..4], 32) catch return 1;
+    //     input[0] = 0x99;
+    //     utils.write_output(padded_key);
+    // }
 
     return 0;
 }
