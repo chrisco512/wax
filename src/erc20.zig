@@ -1,53 +1,65 @@
 const std = @import("std");
 const utils = @import("utils.zig");
+const ValueStorage = @import("value_storage.zig");
+const U256Storage = ValueStorage.U256Storage;
+const SolStorage = ValueStorage.SolStorage;
 
-pub fn name() ![]const u8 {
-    // Todo logic
-    return "TokenName";
-}
+pub const ERC20 = struct {
+    pub usingnamespace SolStorage(@This());
 
-pub fn symbol() ![]const u8 {
-    // Todo logic
-    return "TKN";
-}
+    // Define state here
+    total_supply: U256Storage,
 
-pub fn decimals() u8 {
-    // Todo logic
-    return 18;
-}
+    // // Define functions here
+    // pub fn name() ![]const u8 {
+    //     // Todo logic
+    //     return "TokenName";
+    // }
 
-pub fn initate(total_supply: []u8) !void {
-    var slot_array: [32]u8 = utils.SLOTS.TOTAL_SUPPLY;
-    try utils.write_storage(&slot_array, total_supply);
-}
+    // pub fn symbol() ![]const u8 {
+    //     // Todo logic
+    //     return "TKN";
+    // }
 
-pub fn totalSupply() ![]u8 {
-    var slot_array: [32]u8 = utils.SLOTS.TOTAL_SUPPLY;
-    const total_supply = try utils.read_storage(&slot_array);
-    return total_supply;
-}
+    // pub fn decimals() u8 {
+    //     // Todo logic
+    //     return 18;
+    // }
 
-// pub fn balanceOf(owner: []const u8) u256 {
-//     // Todo logic
-//     return 1000;
-// }
+    pub fn initiate(self: *@This(), total_supply: []u8) !void {
+        const total_supply_u256 = try utils.bytesToU256(total_supply);
+        try self.total_supply.set_value(total_supply_u256);
+    }
 
-// pub fn transfer(to: []const u8, value: u256) bool {
-//     // Todo logic
-//     return true;
-// }
+    pub fn totalSupply(self: *@This()) ![]u8 {
+        const value = try self.total_supply.get_value();
 
-// pub fn transferFrom(from: []const u8, to: []const u8, value: u256) bool {
-//     // Todo logic
-//     return true;
-// }
+        return utils.u256ToBytes(value);
+    }
 
-// pub fn approve(spender: []const u8, value: u256) bool {
-//     // Todo logic
-//     return true;
-// }
+    // pub fn balanceOf(owner: []const u8) u256 {
+    //     // Todo logic
+    //     return 1000;
+    // }
 
-// pub fn allowance(owner: []const u8, spender: []const u8) u256 {
-//     // Todo logic
-//     return 500;
-// }
+    // pub fn transfer(to: []const u8, value: u256) bool {
+    //     // Todo logic
+    //     return true;
+    // }
+
+    // pub fn transferFrom(from: []const u8, to: []const u8, value: u256) bool {
+    //     // Todo logic
+    //     return true;
+    // }
+
+    // pub fn approve(spender: []const u8, value: u256) bool {
+    //     // Todo logic
+    //     return true;
+    // }
+
+    // pub fn allowance(owner: []const u8, spender: []const u8) u256 {
+    //     // Todo logic
+    //     return 500;
+    // }
+
+};
