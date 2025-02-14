@@ -183,28 +183,3 @@ pub fn SolStorage(comptime Self: type) type {
         }
     };
 }
-
-// String storage implementation
-const StringStorageValue = StorageValue([]const u8);
-
-// U256 storage implementation
-const U256StorageValue = StorageValue(u256);
-
-// Define mixin for shared initialization behavior
-fn StorageInit(comptime Self: type) type {
-    return struct {
-        pub fn init() Self {
-            var result: Self = undefined;
-            comptime var offset: u32 = 0;
-            inline for (std.meta.fields(Self)) |field| {
-                @field(result, field.name) = switch (field.type) {
-                    U256StorageValue => U256StorageValue.init(offset),
-                    StringStorageValue => StringStorageValue.init(offset),
-                    else => unreachable,
-                };
-                offset += 1;
-            }
-            return result;
-        }
-    };
-}
