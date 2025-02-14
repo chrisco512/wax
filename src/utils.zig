@@ -1,5 +1,6 @@
 const std = @import("std");
 const WasmAllocator = @import("WasmAllocator.zig");
+const ValueStorage = @import("value_storage.zig");
 const erc20 = @import("erc20.zig");
 const zabi = @import("zabi");
 const decoder = zabi.decoding.abi_decoder;
@@ -11,6 +12,7 @@ pub extern "vm_hooks" fn storage_flush_cache(clear: bool) void;
 pub extern "vm_hooks" fn storage_load_bytes32(key: *const u8, dest: *u8) void;
 pub extern "vm_hooks" fn native_keccak256(bytes: *const u8, len: usize, output: *u8) void;
 pub extern "vm_hooks" fn block_number() u64;
+pub extern "vm_hooks" fn msg_sender(sender: *const u8) void;
 
 // Standard ERC20 function selectors (first 4 bytes of keccak256 hash of function signatures)
 const INITIATE_SELECTOR = [_]u8{ 0x79, 0x01, 0xea, 0x78 }; // initiate(uint256) 0x7901ea78
@@ -20,7 +22,7 @@ const TRANSFER_SELECTOR = [_]u8{ 0xa9, 0x05, 0x9c, 0xbb }; // transfer(address,u
 const ALLOWANCE_SELECTOR = [_]u8{ 0xdd, 0x62, 0xed, 0x3e }; // allowance(address,address) 0xdd62ed3e
 const APPROVE_SELECTOR = [_]u8{ 0x09, 0x5e, 0xa7, 0xb3 }; // approve(address,uint256) 0x095ea7b3
 const TRANSFER_FROM_SELECTOR = [_]u8{ 0x23, 0xb8, 0x72, 0xdd }; // transferFrom(address,address,uint256) 0x23b872dd
-
+const OWNER_SELECTOR = [_]u8{ 0x8d, 0xa5, 0xcb, 0x5b }; // owner() 0x8da5cb5b
 // Storage slots
 pub const SLOTS = struct {
     pub const NAME: [32]u8 = .{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x01 };
@@ -69,7 +71,6 @@ pub fn write_storage(key: []u8, value: []u8) !void {
     const key_to_set = try left_pad(key, 32);
     const value_to_set = try left_pad(value, 32);
     storage_cache_bytes32(@ptrCast(key_to_set), @ptrCast(value_to_set));
-    storage_flush_cache(true);
 }
 
 pub fn bytes32ToU256(bytes: [32]u8) u256 {
@@ -119,8 +120,92 @@ pub fn u32ToBytes(value: u32) ![]u8 {
     return result;
 }
 
+pub fn bytesToAddress(bytes: []const u8) !ValueStorage.Address {
+    if (bytes.len != 20 and bytes.len != 32) return error.InvalidLength;
+
+    var result: ValueStorage.Address = undefined;
+    if (bytes.len == 32) {
+        // Check if left padded (common case)
+        var left_zeros = true;
+        for (bytes[0..12]) |b| {
+            if (b != 0) {
+                left_zeros = false;
+                break;
+            }
+        }
+
+        if (left_zeros) {
+            // Left padded - take last 20 bytes
+            std.mem.copyBackwards(u8, &result, bytes[12..32]);
+        } else {
+            // Right padded - take first 20 bytes
+            std.mem.copyBackwards(u8, &result, bytes[0..20]);
+        }
+    } else {
+        std.mem.copyBackwards(u8, &result, bytes);
+    }
+    return result;
+}
+
+pub fn addressToBytes(address: ValueStorage.Address) ![]u8 {
+    var result: []u8 = try allocator.alloc(u8, 32);
+    std.mem.copyBackwards(u8, result[12..32], &address);
+    return result;
+}
+
+pub fn usizeToBytes(value: usize) ![]u8 {
+    var temp: [8]u8 = undefined;
+    const result = try allocator.alloc(u8, 32);
+
+    // Zero initialize
+    @memset(result, 0);
+
+    // Write usize in big endian
+    std.mem.writeInt(u64, &temp, value, .big);
+
+    // Copy to last 8 bytes
+    std.mem.copyForwards(u8, result[24..], &temp);
+
+    return result;
+}
+
 pub fn isSliceUndefined(slice: []const u8) bool {
     return slice.ptr == undefined or slice.len == 0;
+}
+
+pub const AddressUtils = struct {
+    pub fn from_bytes(self: @This(), bytes: []u8) !ValueStorage.Address {
+        _ = self;
+        const result = try bytesToAddress(bytes);
+        return result;
+    }
+    pub fn to_bytes(self: @This(), value: ValueStorage.Address) ![]u8 {
+        _ = self;
+        const result = try addressToBytes(value);
+        return result;
+    }
+};
+
+pub const U256Utils = struct {
+    pub fn from_bytes(self: @This(), bytes: []u8) !u256 {
+        _ = self;
+        const result = try bytesToU256(bytes);
+        return result;
+    }
+
+    pub fn to_bytes(self: @This(), value: u256) ![]u8 {
+        _ = self;
+        const result = try u256ToBytes(value);
+        return result;
+    }
+};
+
+pub fn getValueUtils(comptime T: type) type {
+    return switch (T) {
+        u256 => U256Utils,
+        ValueStorage.Address => AddressUtils,
+        else => @panic("Unsupported type for MappingStorage"),
+    };
 }
 
 pub fn method_router(selector: [4]u8, data: []u8, contract: *erc20.ERC20) !void {
@@ -137,9 +222,10 @@ pub fn method_router(selector: [4]u8, data: []u8, contract: *erc20.ERC20) !void 
             // const decoded = try decoder.decodeAbiFunction([20]u8, allocator, encoded, .{});
             // try stdout.print("balanceOf called for address: 0x{}\n", .{std.fmt.fmtSliceHexLower(&decoded.result)});
             // Add balanceOf logic here
-            const total_supply_u256 = try bytesToU256(data);
-            const value_bytes = try u256ToBytes(total_supply_u256);
-            write_output(value_bytes);
+            const address = try bytesToAddress(data);
+            const balance = try contract.balanceOf(address);
+            const balance_bytes = try u256ToBytes(balance);
+            write_output(balance_bytes);
         },
         @as(u32, TRANSFER_SELECTOR[0]) << 24 | @as(u32, TRANSFER_SELECTOR[1]) << 16 | @as(u32, TRANSFER_SELECTOR[2]) << 8 | @as(u32, TRANSFER_SELECTOR[3]) => {
             // try stdout.print("transfer called\n", .{});
@@ -156,17 +242,14 @@ pub fn method_router(selector: [4]u8, data: []u8, contract: *erc20.ERC20) !void 
         @as(u32, TRANSFER_FROM_SELECTOR[0]) << 24 | @as(u32, TRANSFER_FROM_SELECTOR[1]) << 16 | @as(u32, TRANSFER_FROM_SELECTOR[2]) << 8 | @as(u32, TRANSFER_FROM_SELECTOR[3]) => {
             // Add transferFrom logic here
         },
+        @as(u32, OWNER_SELECTOR[0]) << 24 | @as(u32, OWNER_SELECTOR[1]) << 16 | @as(u32, OWNER_SELECTOR[2]) << 8 | @as(u32, OWNER_SELECTOR[3]) => {
+            const owner = try contract.owner();
+            const address_utils = AddressUtils{};
+            const owner_bytes = try address_utils.to_bytes(owner);
+            write_output(owner_bytes);
+        },
         else => {},
     }
-}
-
-pub fn get_balance_slot(owner: []const u8) []u8 {
-    return compute_mapping_slot(owner, SLOTS.BALANCES);
-}
-
-pub fn get_allowance_slot(owner: []const u8, spender: []const u8) []u8 {
-    const spender_slot = compute_mapping_slot(spender, SLOTS.ALLOWANCES);
-    return compute_mapping_slot(owner, std.mem.bytesToValue(u256, spender_slot));
 }
 
 pub fn keccak256(data: []u8) ![]u8 {
@@ -175,9 +258,8 @@ pub fn keccak256(data: []u8) ![]u8 {
     return output;
 }
 
-pub fn compute_mapping_slot(key: []const u8, slot: u256) []u8 {
-    var concat: [64]u8 = undefined;
-    std.mem.copyForwards(u8, concat[0..32], key);
-    std.mem.copyForwards(u8, concat[32..64], &slot);
-    return keccak256(concat[0..]);
+pub fn get_msg_sender() !ValueStorage.Address {
+    const sender = try allocator.alloc(u8, 32);
+    msg_sender(@ptrCast(sender));
+    return try bytesToAddress(sender);
 }
