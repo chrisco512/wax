@@ -8,30 +8,6 @@ pub const Address: type = [20]u8;
 const AddressUtils = utils.AddressUtils;
 const U256Utils = utils.U256Utils;
 
-fn StorageValue(comptime T: type) type {
-    return struct {
-        offset: u32,
-        value: T,
-
-        pub fn init(comptime offset_value: u32) @This() {
-            return .{
-                .offset = offset_value,
-                .value = undefined,
-            };
-        }
-
-        pub fn set_value(self: *@This(), value: T) void {
-            utils.write_storage(utils.u32ToBytes(self.offset), value);
-            self.value = value;
-        }
-
-        pub fn get_value(self: @This()) T {
-            utils.read_storage(utils.u32ToBytes(self.offset));
-            return self.value;
-        }
-    };
-}
-
 pub const U256Storage = struct {
     offset: u32,
     cache: []u8,
@@ -174,7 +150,6 @@ pub fn SolStorage(comptime Self: type) type {
                 @field(result, field.name) = switch (field.type) {
                     U256Storage => field.type.init(offset),
                     AddressStorage => field.type.init(offset),
-                    // MappingStorage => field.type.init(offset),
                     else => field.type.init(offset),
                 };
                 offset += 1;

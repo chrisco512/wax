@@ -55,7 +55,7 @@ pub const ERC20 = struct {
 
     pub fn balanceOf(self: *@This(), address: Address) !u256 {
         const balance = try self.balances.get_value(address);
-        // Todo logic
+
         return balance;
     }
 
