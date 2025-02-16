@@ -7,8 +7,25 @@ const Router = wax.Router;
 const hashAtComptime = wax.hashAtComptime;
 const getSelector = wax.getSelector;
 const Context = wax.Context;
+const NextFn = wax.NextFn;
 
-fn foo(ctx: Context) void {
+fn mw(ctx: *const Context, next: *const NextFn) anyerror!void {
+    if (builtin.is_test) {
+        std.debug.print("in the mw\n", .{});
+    }
+
+    try next(ctx);
+}
+
+fn mw2(ctx: *const Context, next: *const NextFn) anyerror!void {
+    if (builtin.is_test) {
+        std.debug.print("in mw2, bitches!\n", .{});
+    }
+
+    try next(ctx);
+}
+
+fn foo(ctx: *const Context) void {
     _ = ctx;
 
     if (builtin.is_test) {
@@ -16,7 +33,7 @@ fn foo(ctx: Context) void {
     }
 }
 
-fn bar(ctx: Context) void {
+fn bar(ctx: *const Context) void {
     // _ = ctx;
 
     if (builtin.is_test) {
@@ -35,6 +52,7 @@ export fn user_entrypoint() u32 {
         .block = .{
             .number = 69,
         },
+        .calldata = &.{},
     };
 
     // little-endian
@@ -43,12 +61,12 @@ export fn user_entrypoint() u32 {
     // Define routes here
     const routes = comptime [_]Route{
         Route.init("foo", .{}, foo),
-        Route.init("bar", .{}, bar),
+        Route.init("bar", .{ mw, mw2 }, bar),
     };
 
-    const router = comptime Router.init(&routes);
+    // const router = comptime Router.init(&routes);
 
-    if (router.handle(selector, &.{}, &ctx)) |_| {
+    if (Router.handle(&routes, selector, &ctx)) |_| {
         return 1; // Success
     } else |_| {
         return 0; // General error code

@@ -1,6 +1,7 @@
 const std = @import("std");
 const crypto = std.crypto;
 
+// Converts a Zig type to a Solidity ABI type string
 pub fn zigToSolidityType(comptime T: type) []const u8 {
     return switch (@typeInfo(T)) {
         .int => |info| switch (info.signedness) {
@@ -28,18 +29,26 @@ pub fn zigToSolidityType(comptime T: type) []const u8 {
     };
 }
 
+// Given a name string and a function signature, computes a Solidity ABI 4-byte
+// selector as a u32 at comptime
 pub fn getSelector(comptime name: []const u8, comptime func: anytype) u32 {
     comptime {
         const func_info = @typeInfo(@TypeOf(func)).@"fn";
+
+        if (func_info.params.len == 0 or func_info.params[0].type.? != *const Context) {
+            @compileError("First parameter of func must be Context type");
+        }
 
         // Append function name
         var sig: []const u8 = name;
         sig = sig ++ "(";
 
         // Append argument types
-        for (func_info.params[1..], 0..) |param, i| {
-            if (i > 0) sig = sig ++ ",";
-            sig = sig ++ zigToSolidityType(param.type.?);
+        if (func_info.params.len > 1) {
+            for (func_info.params[1..], 0..) |param, i| {
+                if (i > 0) sig = sig ++ ",";
+                sig = sig ++ zigToSolidityType(param.type.?);
+            }
         }
 
         // Append closing parenthesis
@@ -53,6 +62,7 @@ pub fn getSelector(comptime name: []const u8, comptime func: anytype) u32 {
     }
 }
 
+// Converts a byte array at comptime to a hex-encoded string
 pub fn bytesToHexString(comptime T: type, comptime bytes: []const u8) T {
     var result: T = undefined;
     comptime {
@@ -68,6 +78,7 @@ pub fn bytesToHexString(comptime T: type, comptime bytes: []const u8) T {
     return result;
 }
 
+// Comptime fn for computing the keccak256 hash of a string
 pub fn hashAtComptime(comptime data: []const u8) [32]u8 {
     comptime {
         @setEvalBranchQuota(100000);
@@ -77,56 +88,65 @@ pub fn hashAtComptime(comptime data: []const u8) [32]u8 {
     }
 }
 
+// Context struct contains vm data like block number, timestamp, etc
+// Plus access to storage via Context.store
 pub const Context = struct {
     block: struct {
         number: u256,
     },
+    calldata: []const u8,
 };
 
-// pub const HandlerFn = *const anyopaque;
-// pub const MiddlewareFn = *const fn (ctx: Context, next: *const fn (ctx: Context) void) void;
-pub fn MiddlewareFn(comptime NextFn: type) type {
-    return fn (ctx: *Context, next: NextFn) anyerror!void;
-}
+pub const NextFn = fn (*const Context) anyerror!void;
+pub const MiddlewareFn = fn (ctx: *const Context, next: *const NextFn) anyerror!void;
 
+// Routes define public methods for the smart contract
+// Any number of middleware functions can be chained before the
+// handler is invoked.
 pub const Route = struct {
     selector: u32,
-    handler: *const anyopaque,
-    middleware: []const *const anyopaque,
+    handler: *const NextFn,
+    middleware: []*const MiddlewareFn,
 
     pub fn init(comptime name: []const u8, comptime middleware: anytype, comptime handler: anytype) Route {
+        // Encodes the selector according to Solidity ABI
         const selector = getSelector(name, handler);
 
+        // Builds an array of middleware functions for this route
         const mws = comptime blk: {
-            var mw_arr: [middleware.len]*const anyopaque = undefined;
+            var mw_arr: [middleware.len]*const MiddlewareFn = undefined;
             for (middleware, 0..) |mw, i| {
                 mw_arr[i] = &mw;
             }
             break :blk mw_arr;
         };
 
-        // instead of storing the handler itself as the handler, we should
-        // store a function that decodes and invokes the handler
+        // This wraps the handler in a decoder/encoder for Solidity compatibility
+        //
+        // NOTE: It may be possible to create an encoding option that would
+        // conditionally decode/encode according to an alternate ABI (such as
+        // Solidity's encodePacked ABI).
         const decodeHandler = returnDecodingFunction(handler);
 
         return Route{
             .selector = selector,
             .handler = &decodeHandler,
-            .middleware = &mws,
+            .middleware = @constCast(mws[0..]),
         };
     }
 };
 
-pub fn decodeAndCallHandler(comptime handler: anytype, ctx: *const Context, bytes: []const u8) !void {
+// Returns a tuple of types for the parameters of a function
+// We need this type to build the args tuple for the handler
+pub fn getParamsType(comptime handler: anytype) type {
     if (@typeInfo(@TypeOf(handler)) != .@"fn") {
         @compileError("Expected a function, but got " ++ @typeName(@TypeOf(handler)));
     }
 
     const handler_info = @typeInfo(@TypeOf(handler)).@"fn";
-    var byte_index: usize = 0;
 
-    // generates a tuple of types representing the args expected for the handler
-    const ArgsType = blk: {
+    // Generates a tuple of types for the parameters of the function
+    const ParamsType = blk: {
         comptime var fields: [handler_info.params.len]type = undefined;
         inline for (handler_info.params, 0..) |param, i| {
             fields[i] = param.type.?;
@@ -134,13 +154,38 @@ pub fn decodeAndCallHandler(comptime handler: anytype, ctx: *const Context, byte
         break :blk std.meta.Tuple(&fields);
     };
 
-    var args: ArgsType = undefined;
-    args[0] = ctx.*;
+    return ParamsType;
+}
 
-    // Decode each argument from calldata, skipping ctx
-    inline for (handler_info.params[1..], 0..) |param, i| {
-        args[i] = try decodeByType(param.type.?, bytes, &byte_index);
+// This function expects a handler fn, Context, and raw calldata byte array
+// (not including selector prefix)
+pub fn decodeHandlerArgs(comptime handler: anytype, ctx: *const Context) getParamsType(handler) {
+    if (@typeInfo(@TypeOf(handler)) != .@"fn") {
+        @compileError("Expected a function, but got " ++ @typeName(@TypeOf(handler)));
     }
+
+    const handler_info = @typeInfo(@TypeOf(handler)).@"fn";
+    var byte_index: usize = 0;
+
+    // Set up args tuple
+    const ParamsType = getParamsType(handler);
+    var args: ParamsType = undefined;
+    args[0] = ctx;
+
+    // Decode each argument from calldata, skipping context param
+    inline for (handler_info.params[1..], 0..) |param, i| {
+        args[i] = try decodeByType(param.type.?, ctx.calldata, &byte_index);
+    }
+
+    return args;
+}
+
+pub fn decodeAndCallHandler(comptime handler: anytype, ctx: *const Context) !void {
+    if (@typeInfo(@TypeOf(handler)) != .@"fn") {
+        @compileError("Expected a function, but got " ++ @typeName(@TypeOf(handler)));
+    }
+
+    const args = decodeHandlerArgs(handler, ctx);
 
     // TODO: Encode return data from handler and write to buffer
     _ = @call(.auto, handler, args);
@@ -165,87 +210,50 @@ const DecodeError = error{
     DecodeFailed,
 };
 
-const DecodingFn = fn (*const Context, []const u8) DecodeError!void;
-
-pub fn returnDecodingFunction(comptime handler: anytype) DecodingFn {
+pub fn returnDecodingFunction(comptime handler: anytype) NextFn {
     if (@typeInfo(@TypeOf(handler)) != .@"fn") {
         @compileError("Expected a function, but got " ++ @typeName(@TypeOf(handler)));
     }
 
     return struct {
-        pub fn call(ctx: *const Context, bytes: []const u8) DecodeError!void {
-            _ = try decodeAndCallHandler(handler, ctx, bytes);
+        pub fn call(ctx: *const Context) DecodeError!void {
+            _ = try decodeAndCallHandler(handler, ctx);
         }
     }.call;
 }
 
+// Container for all public routes. Exposes a handle method which
+// chooses the proper Route and chain calls all middleware functions
+// before invoking the handler.
 pub const Router = struct {
-    routes: []const Route,
+    fn buildChain(comptime r: Route) *const NextFn {
+        comptime {
+            // Start with the handler
+            var next: *const NextFn = r.handler;
 
-    pub fn init(comptime routes: []const Route) Router {
-        return Router{
-            .routes = routes,
-        };
+            // Build middleware chain in reverse order
+            var i = r.middleware.len;
+            while (i > 0) : (i -= 1) {
+                const middleware = r.middleware[i - 1];
+                const next_middleware = next;
+                const wrapper = struct {
+                    fn wrapped(ctx: *const Context) anyerror!void {
+                        try middleware(ctx, next_middleware);
+                    }
+                }.wrapped;
+                next = &wrapper;
+            }
+
+            return next;
+        }
     }
 
-    pub fn handle(self: *const Router, selector: u32, comptime calldata: []const u8, ctx: *const Context) !void {
-        for (self.routes) |r| {
-            if (r.selector == selector) {
-                const NextFn = fn (*const Context, *const Route, []const u8) anyerror!void;
-                const next: NextFn = struct {
-                    fn call_next(context: *const Context, route: *const Route, cd: []const u8) anyerror!void {
-                        const handlerFn: *const DecodingFn = @alignCast(@ptrCast(route.handler));
-                        _ = try @call(.auto, handlerFn, .{ context, cd });
-                    }
-                }.call_next;
-
-                // Build middleware chain in reverse order
-                var i = r.middleware.len;
-                while (i > 0) {
-                    i -= 1;
-                    const middleware: *const MiddlewareFn(NextFn) = @alignCast(@ptrCast(r.middleware[i]));
-                    const old_next = next;
-                    const next_wrapper: NextFn = struct {
-                        fn wrap(context: *const Context, route: *const Route, cd: []const u8) anyerror!void {
-                            try middleware(context, struct {
-                                fn forward(ctx_fwd: *const Context) anyerror!void {
-                                    try old_next(ctx_fwd, route, cd);
-                                }
-                            }.forward);
-                        }
-                    }.wrap;
-                    _ = next_wrapper; // Use this to replace `next` if you need to chain further
-                }
-
-                try next(ctx, &r, calldata);
+    pub fn handle(comptime routes: []const Route, selector: u32, ctx: *const Context) !void {
+        inline for (routes) |route| {
+            if (route.selector == selector) {
+                const chain = comptime buildChain(route);
+                try chain(ctx);
                 return;
-
-                //const handler = HandlerFn
-                // Middleware execution logic
-                // const NextFn = fn (*Context) anyerror!void;
-                // const next: NextFn = struct {
-                // fn call_next(context: *Context) anyerror!void {
-                //                        Call the actual handler as the last middleware
-                // const handlerFn: DecodingFn = @ptrCast(r.handler);
-                // _ = @call(.auto, handlerFn, .{ context, calldata });
-                // }
-                // }.call_next;
-
-                // Build middleware chain in reverse order
-                // var i = r.middleware.len;
-                // while (i > 0) {
-                // i -= 1;
-                // const middleware: MiddlewareFn(NextFn) = @ptrCast(r.middleware[i]);
-                // const old_next = next;
-                // next = struct {
-                // fn wrap(context: *Context) anyerror!void {
-                // try middleware(context, old_next);
-                // }
-                // }.wrap;
-                // }
-                //
-                // try next(ctx);
-                // return;
             }
         }
     }
@@ -263,11 +271,13 @@ test "hashAtComptime" {
 
 test "getSelector" {
     const Contract = struct {
-        pub fn incrementBy(amount: u256) void {
+        pub fn incrementBy(ctx: Context, amount: u256) void {
+            _ = ctx;
             _ = amount;
         }
 
-        pub fn getCount() u256 {
+        pub fn getCount(ctx: Context) u256 {
+            _ = ctx;
             return 0;
         }
     };
