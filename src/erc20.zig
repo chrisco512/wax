@@ -11,29 +11,20 @@ const Address = ValueStorage.Address;
 pub const ERC20 = struct {
     pub usingnamespace SolStorage(@This());
 
+    // Define constant value here
+    const DECIMALS: u8 = 18;
+
     // Define state here
     total_supply: U256Storage,
     _owner: AddressStorage,
     balances: MappingStorage(Address, U256Storage),
     allowances: MappingStorage(Address, MappingStorage(Address, U256Storage)),
 
-    // // Define functions here
-    // pub fn name() ![]const u8 {
-    //     // Todo logic
-    //     return "TokenName";
-    // }
+    pub fn decimals(_: *@This()) u8 {
+        return DECIMALS;
+    }
 
-    // pub fn symbol() ![]const u8 {
-    //     // Todo logic
-    //     return "TKN";
-    // }
-
-    // pub fn decimals() u8 {
-    //     // Todo logic
-    //     return 18;
-    // }
-
-    pub fn initiate(self: *@This(), total_supply: []u8) !void {
+    pub fn initiate(self: *@This(), total_supply: u256) !void {
         // First, check if it is already initiated
         const old_owner = try self.owner();
         const address_utils = utils.AddressUtils{};
@@ -41,13 +32,11 @@ pub const ERC20 = struct {
             @panic("Already initiated");
         }
 
-        const total_supply_u256 = try utils.bytesToU256(total_supply);
         const sender = try utils.get_msg_sender();
-        // const owner = try self.get_owner();
-        try self.total_supply.set_value(total_supply_u256);
+        try self.total_supply.set_value(total_supply);
         try self._owner.set_value(sender);
         var balances_setter = try self.balances.setter(sender);
-        try balances_setter.set_value(total_supply_u256);
+        try balances_setter.set_value(total_supply);
     }
 
     pub fn owner(self: *@This()) !Address {

@@ -23,6 +23,9 @@ const ALLOWANCE_SELECTOR = [_]u8{ 0xdd, 0x62, 0xed, 0x3e }; // allowance(address
 const APPROVE_SELECTOR = [_]u8{ 0x09, 0x5e, 0xa7, 0xb3 }; // approve(address,uint256) 0x095ea7b3
 const TRANSFER_FROM_SELECTOR = [_]u8{ 0x23, 0xb8, 0x72, 0xdd }; // transferFrom(address,address,uint256) 0x23b872dd
 const OWNER_SELECTOR = [_]u8{ 0x8d, 0xa5, 0xcb, 0x5b }; // owner() 0x8da5cb5b
+const DECIMALS_SELECTOR = [_]u8{ 0x31, 0x3c, 0xe5, 0x67 }; // decimals() 0x313ce567
+const NAME_SELECTOR = [_]u8{ 0x06, 0xfd, 0xde, 0x03 }; // name() 0x06fdde03
+const SYMBOL_SELECTOR = [_]u8{ 0x95, 0xd8, 0x9b, 0x41 }; // symbol() 0x95d89b41
 
 pub const ZERO_BYTES = [_]u8{0} ** 32;
 
@@ -127,6 +130,24 @@ pub fn u32ToBytes(value: u32) ![]u8 {
     return result;
 }
 
+pub fn u8ToBytes(value: u8) ![]u8 {
+    var result = try allocator.alloc(u8, 32);
+    // Zero initialize
+    @memset(result, 0);
+    // Write u8 to last byte
+    result[31] = value;
+    return result;
+}
+
+pub fn boolToBytes(value: bool) ![]u8 {
+    var result = try allocator.alloc(u8, 32);
+    // Zero initialize
+    @memset(result, 0);
+    // Write bool to last byte
+    result[31] = @intFromBool(value);
+    return result;
+}
+
 pub fn bytesToAddress(bytes: []const u8) !ValueStorage.Address {
     if (bytes.len != 20 and bytes.len != 32) return error.InvalidLength;
 
@@ -157,6 +178,12 @@ pub fn bytesToAddress(bytes: []const u8) !ValueStorage.Address {
 pub fn addressToBytes(address: ValueStorage.Address) ![]u8 {
     var result: []u8 = try allocator.alloc(u8, 32);
     std.mem.copyBackwards(u8, result[12..32], &address);
+    return result;
+}
+
+pub fn dupeString(str: []const u8) ![]u8 {
+    const result = try allocator.alloc(u8, str.len);
+    std.mem.copyForwards(u8, result, str);
     return result;
 }
 
@@ -224,6 +251,8 @@ pub fn is_primitives(comptime T: type) bool {
     return switch (T) {
         u256 => true,
         ValueStorage.Address => true,
+        bool => true,
+        [32]u8 => true,
         else => false,
     };
 }
@@ -241,7 +270,8 @@ pub fn getValueUtils(comptime T: type) type {
 pub fn method_router(selector: [4]u8, data: []u8, contract: *erc20.ERC20) !void {
     switch (@as(u32, selector[0]) << 24 | @as(u32, selector[1]) << 16 | @as(u32, selector[2]) << 8 | @as(u32, selector[3])) {
         @as(u32, INITIATE_SELECTOR[0]) << 24 | @as(u32, INITIATE_SELECTOR[1]) << 16 | @as(u32, INITIATE_SELECTOR[2]) << 8 | @as(u32, INITIATE_SELECTOR[3]) => {
-            try contract.initiate(data);
+            const total_supply = try bytesToU256(data);
+            try contract.initiate(total_supply);
         },
         @as(u32, TOTAL_SUPPLY_SELECTOR[0]) << 24 | @as(u32, TOTAL_SUPPLY_SELECTOR[1]) << 16 | @as(u32, TOTAL_SUPPLY_SELECTOR[2]) << 8 | @as(u32, TOTAL_SUPPLY_SELECTOR[3]) => {
             const total_supply = try contract.totalSupply();
@@ -296,6 +326,21 @@ pub fn method_router(selector: [4]u8, data: []u8, contract: *erc20.ERC20) !void 
             const owner_bytes = try address_utils.to_bytes(owner);
             write_output(owner_bytes);
         },
+        @as(u32, DECIMALS_SELECTOR[0]) << 24 | @as(u32, DECIMALS_SELECTOR[1]) << 16 | @as(u32, DECIMALS_SELECTOR[2]) << 8 | @as(u32, DECIMALS_SELECTOR[3]) => {
+            const decimals = contract.decimals();
+            const decimals_bytes = try u32ToBytes(decimals);
+            write_output(decimals_bytes);
+        },
+        // @as(u32, NAME_SELECTOR[0]) << 24 | @as(u32, NAME_SELECTOR[1]) << 16 | @as(u32, NAME_SELECTOR[2]) << 8 | @as(u32, NAME_SELECTOR[3]) => {
+        //     const name = try contract.name();
+        //     const str_slice = try dupeString(name);
+        //     write_output(str_slice);
+        // },
+        // @as(u32, SYMBOL_SELECTOR[0]) << 24 | @as(u32, SYMBOL_SELECTOR[1]) << 16 | @as(u32, SYMBOL_SELECTOR[2]) << 8 | @as(u32, SYMBOL_SELECTOR[3]) => {
+        //     const symbol = try contract.symbol();
+        //     const str_slice = try dupeString(symbol);
+        //     write_output(str_slice);
+        // },
         else => {},
     }
 }
