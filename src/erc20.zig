@@ -34,6 +34,13 @@ pub const ERC20 = struct {
     // }
 
     pub fn initiate(self: *@This(), total_supply: []u8) !void {
+        // First, check if it is already initiated
+        const old_owner = try self.owner();
+        const address_utils = utils.AddressUtils{};
+        if (!address_utils.is_zero_address(old_owner)) {
+            @panic("Already initiated");
+        }
+
         const total_supply_u256 = try utils.bytesToU256(total_supply);
         const sender = try utils.get_msg_sender();
         // const owner = try self.get_owner();
