@@ -21,7 +21,7 @@ pub fn zigToSolidityType(comptime T: type) []const u8 {
                 64 => "uint64",
                 128 => "uint128",
                 256 => "uint256",
-                else => @compileError("Unsupported unsigned intger type"),
+                else => @compileError("Unsupported unsigned integer type"),
             },
         },
         .void => "",
@@ -36,7 +36,7 @@ pub fn getSelector(comptime name: []const u8, comptime func: anytype) u32 {
         const func_info = @typeInfo(@TypeOf(func)).@"fn";
 
         if (func_info.params.len == 0 or func_info.params[0].type.? != *const Context) {
-            @compileError("First parameter of func must be Context type");
+            @compileError("First parameter of func must be *const Context type");
         }
 
         // Append function name
@@ -122,10 +122,6 @@ pub const Route = struct {
         };
 
         // This wraps the handler in a decoder/encoder for Solidity compatibility
-        //
-        // NOTE: It may be possible to create an encoding option that would
-        // conditionally decode/encode according to an alternate ABI (such as
-        // Solidity's encodePacked ABI).
         const decodeHandler = returnDecodingFunction(handler);
 
         return Route{
@@ -157,8 +153,7 @@ pub fn getParamsType(comptime handler: anytype) type {
     return ParamsType;
 }
 
-// This function expects a handler fn, Context, and raw calldata byte array
-// (not including selector prefix)
+// This function expects a handler fn, Context
 pub fn decodeHandlerArgs(comptime handler: anytype, ctx: *const Context) getParamsType(handler) {
     if (@typeInfo(@TypeOf(handler)) != .@"fn") {
         @compileError("Expected a function, but got " ++ @typeName(@TypeOf(handler)));
@@ -271,12 +266,12 @@ test "hashAtComptime" {
 
 test "getSelector" {
     const Contract = struct {
-        pub fn incrementBy(ctx: Context, amount: u256) void {
+        pub fn incrementBy(ctx: *const Context, amount: u256) void {
             _ = ctx;
             _ = amount;
         }
 
-        pub fn getCount(ctx: Context) u256 {
+        pub fn getCount(ctx: *const Context) u256 {
             _ = ctx;
             return 0;
         }

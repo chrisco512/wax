@@ -41,9 +41,6 @@ fn bar(ctx: *const Context) void {
     }
 }
 
-// implement an increment, decrement, and getCount method
-// keccak hash the function names to wire up the router
-// log out to console
 export fn user_entrypoint() u32 {
     // var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     // defer gpa.deinit();
@@ -55,16 +52,11 @@ export fn user_entrypoint() u32 {
         .calldata = &.{},
     };
 
-    // little-endian
-    // const hello_value: u32 = std.mem.readInt(u32, hash_four, .little);
-
     // Define routes here
     const routes = comptime [_]Route{
         Route.init("foo", .{}, foo),
         Route.init("bar", .{ mw, mw2 }, bar),
     };
-
-    // const router = comptime Router.init(&routes);
 
     if (Router.handle(&routes, selector, &ctx)) |_| {
         return 1; // Success
