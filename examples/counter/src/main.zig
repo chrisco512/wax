@@ -9,6 +9,11 @@ const getSelector = wax.getSelector;
 const Context = wax.Context;
 const NextFn = wax.NextFn;
 
+// struct Contract {
+//   owner: Address,
+//
+// }
+
 fn mw(ctx: *const Context, next: *const NextFn) anyerror!void {
     if (builtin.is_test) {
         std.debug.print("in the mw\n", .{});
@@ -19,13 +24,16 @@ fn mw(ctx: *const Context, next: *const NextFn) anyerror!void {
 
 fn mw2(ctx: *const Context, next: *const NextFn) anyerror!void {
     if (builtin.is_test) {
-        std.debug.print("in mw2, bitches!\n", .{});
+        std.debug.print("in mw2, woo!\n", .{});
     }
 
     try next(ctx);
 }
 
 fn foo(ctx: *const Context) void {
+    // var owner = ctx.store.owner.get();
+    // ctx.store.owner.set(ctx.msg.sender());
+
     _ = ctx;
 
     if (builtin.is_test) {
@@ -51,6 +59,8 @@ export fn user_entrypoint() u32 {
         },
         .calldata = &.{},
     };
+
+    // const ctx = createContext(Contract.init(), calldata);
 
     // Define routes here
     const routes = comptime [_]Route{
