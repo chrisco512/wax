@@ -1,11 +1,13 @@
 const std = @import("std");
 const utils = @import("utils.zig");
 const ValueStorage = @import("value_storage.zig");
+const EventUtils = @import("event.zig");
 const U256Storage = ValueStorage.U256Storage;
 const AddressStorage = ValueStorage.AddressStorage;
 const MappingStorage = ValueStorage.MappingStorage;
 const SolStorage = ValueStorage.SolStorage;
-
+const EventEmitter = EventUtils.EventEmitter;
+const Indexed = EventUtils.Indexed;
 const Address = ValueStorage.Address;
 
 pub const ERC20 = struct {
@@ -20,6 +22,18 @@ pub const ERC20 = struct {
     balances: MappingStorage(Address, U256Storage),
     allowances: MappingStorage(Address, MappingStorage(Address, U256Storage)),
 
+    // Define event with EventEmitter
+    Transfer: EventEmitter("Transfer", struct {
+        Indexed(Address), // Indexed data
+        Indexed(Address), // Indexed data
+        u256, // Unindexed data
+    }),
+    Approval: EventEmitter("Approval", struct {
+        Indexed(Address), // Indexed data
+        Indexed(Address), // Indexed data
+        u256, // Unindexed data
+    }),
+
     pub fn decimals(_: *@This()) u8 {
         return DECIMALS;
     }
@@ -32,6 +46,7 @@ pub const ERC20 = struct {
             @panic("Already initiated");
         }
 
+        // Set owner, and mint total_supply number of tokens to the owner
         const sender = try utils.get_msg_sender();
         try self.total_supply.set_value(total_supply);
         try self._owner.set_value(sender);
@@ -63,12 +78,23 @@ pub const ERC20 = struct {
         if (from_balance < value) {
             return false;
         }
+
+        // Calculate new balances
         const new_from_balance = from_balance - value;
         const new_to_balance = to_balance + value;
+
+        // Update balances
         var from_balances_setter = try self.balances.setter(from);
         var to_balances_setter = try self.balances.setter(to);
         try from_balances_setter.set_value(new_from_balance);
         try to_balances_setter.set_value(new_to_balance);
+
+        // Emit Transfer event
+        try self.Transfer.emit(.{
+            Indexed(Address){ .value = from },
+            Indexed(Address){ .value = to },
+            value,
+        });
         return true;
     }
 
@@ -79,13 +105,17 @@ pub const ERC20 = struct {
 
     pub fn transferFrom(self: *@This(), from: Address, to: Address, value: u256) !bool {
         const msg_sender = try utils.get_msg_sender();
+        // Get value from allowances, this is nested mapping, so needs to call twice setter
         var from_allowance_map = try self.allowances.setter(from);
         var from_sender_allowance = try from_allowance_map.setter(msg_sender);
+        // Finally get the storage and then set the value
         const old_from_to_allowance = try from_sender_allowance.get_value();
         if (old_from_to_allowance < value) {
             return false;
         }
+        // Calculate new allowance
         const new_from_to_allowance = old_from_to_allowance - value;
+        // Update allowance
         try from_sender_allowance.set_value(new_from_to_allowance);
         return try self._transfer(from, to, value);
     }
@@ -103,7 +133,12 @@ pub const ERC20 = struct {
         }
         const new_sender_allowance = sender_spender_allowance_value + value;
         try sender_spender_allowance.set_value(new_sender_allowance);
-
+        // emit Approval event
+        try self.Approval.emit(.{
+            Indexed(Address){ .value = sender },
+            Indexed(Address){ .value = spender },
+            value,
+        });
         return true;
     }
 

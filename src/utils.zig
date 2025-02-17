@@ -2,8 +2,7 @@ const std = @import("std");
 const WasmAllocator = @import("WasmAllocator.zig");
 const ValueStorage = @import("value_storage.zig");
 const erc20 = @import("erc20.zig");
-const zabi = @import("zabi");
-const decoder = zabi.decoding.abi_decoder;
+const crypto = std.crypto;
 
 pub extern "vm_hooks" fn read_args(dest: *u8) void;
 pub extern "vm_hooks" fn write_result(data: *const u8, len: usize) void;
@@ -13,6 +12,7 @@ pub extern "vm_hooks" fn storage_load_bytes32(key: *const u8, dest: *u8) void;
 pub extern "vm_hooks" fn native_keccak256(bytes: *const u8, len: usize, output: *u8) void;
 pub extern "vm_hooks" fn block_number() u64;
 pub extern "vm_hooks" fn msg_sender(sender: *const u8) void;
+pub extern "vm_hooks" fn emit_log(data: *const u8, len: usize, topics: usize) void;
 
 // Standard ERC20 function selectors (first 4 bytes of keccak256 hash of function signatures)
 const INITIATE_SELECTOR = [_]u8{ 0x79, 0x01, 0xea, 0x78 }; // initiate(uint256) 0x7901ea78
@@ -265,6 +265,66 @@ pub fn getValueUtils(comptime T: type) type {
     };
 }
 
+pub fn abi_encode(comptime T: type, value: T) ![32]u8 {
+    var result: [32]u8 = [_]u8{0} ** 32; // Zero initialized
+
+    switch (T) {
+        ValueStorage.Address => {
+            // Right-align address in 32 byte array
+            std.mem.copyForwards(u8, result[12..], &value);
+        },
+        u256 => {
+            const bytes = try u256ToBytes(value);
+            std.mem.copyForwards(u8, &result, bytes);
+        },
+        bool => {
+            result[31] = if (value) 1 else 0;
+        },
+        [32]u8 => {
+            std.mem.copyForwards(u8, &result, &value);
+        },
+        else => {
+            @compileError("Unsupported type for ABI encoding: " ++ @typeName(T));
+        },
+    }
+
+    return result;
+}
+
+// Converts a Zig type to a Solidity ABI type string
+pub fn zigToSolidityType(T: type) []const u8 {
+    return switch (@typeInfo(T)) {
+        .Int => |info| switch (info.signedness) {
+            .signed => switch (info.bits) {
+                8 => "int8",
+                16 => "int16",
+                32 => "int32",
+                64 => "int64",
+                128 => "int128",
+                256 => "int256",
+                else => @compileError("Unsupported integer type"),
+            },
+            .unsigned => switch (info.bits) {
+                8 => "uint8",
+                16 => "uint16",
+                32 => "uint32",
+                64 => "uint64",
+                128 => "uint128",
+                256 => "uint256",
+                else => @compileError("Unsupported unsigned integer type"),
+            },
+        },
+        .Array => |info| switch (info.len) {
+            20 => "address",
+            32 => "bytes32",
+            else => @compileError("Unsupported array length"),
+        },
+        .Bool => "bool",
+        .Void => "",
+        else => @compileError("Unsupported type: " ++ @typeName(T)),
+    };
+}
+
 // Todo, implement a general use case method router
 // Currently this router only supports standard erc20 interface
 pub fn method_router(selector: [4]u8, data: []u8, contract: *erc20.ERC20) !void {
@@ -352,8 +412,41 @@ pub fn keccak256(data: []u8) ![32]u8 {
     return output;
 }
 
+// Instead of above keccak256() running on runtime,
+// this fn will only be used to compute the keccak256 hash during compile time
+// Comptime fn for computing the keccak256 hash of a string
+pub fn hashAtComptime(comptime data: []const u8) [32]u8 {
+    comptime {
+        @setEvalBranchQuota(100000);
+        var hash: [32]u8 = undefined;
+        std.crypto.hash.sha3.Keccak256.hash(data, &hash, .{});
+        return hash;
+    }
+}
+
 pub fn get_msg_sender() !ValueStorage.Address {
     const sender = try allocator.alloc(u8, 32);
     msg_sender(@ptrCast(sender));
     return try bytesToAddress(sender);
+}
+
+pub fn emit_evm_log(topics: [][32]u8, data: []u8) !void {
+    if (topics.len > 4) {
+        @panic("Too many topics");
+    }
+    const topic_bytes_len = 32 * topics.len;
+    const total_bytes_len = topic_bytes_len + data.len;
+    var bytes = try allocator.alloc(u8, total_bytes_len);
+    defer allocator.free(bytes);
+
+    // Copy each topic's bytes sequentially
+    var i: usize = 0;
+    for (topics) |topic| {
+        std.mem.copyForwards(u8, bytes[i * 32 .. (i + 1) * 32], &topic);
+        i += 1;
+    }
+
+    // Copy data after topics
+    std.mem.copyForwards(u8, bytes[topic_bytes_len..], data);
+    emit_log(@ptrCast(bytes), bytes.len, topics.len);
 }

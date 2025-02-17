@@ -1,5 +1,4 @@
 const std = @import("std");
-const WasmAllocator = @import("WasmAllocator.zig");
 const utils = @import("utils.zig");
 
 const HashMap = std.HashMap;
@@ -196,13 +195,6 @@ pub fn MappingStorage(comptime KeyType: type, comptime ValueStorageType: type) t
         pub fn get_value(self: *@This()) !ValueInnerType {
             return self;
         }
-
-        // pub fn remove(self: *@This(), key: KeyType) !void {
-        //     const key_bytes = try self.converter.key_utils.to_bytes(key);
-        //     const slot_key_offset = try compute_mapping_slot(self.offset, key_bytes);
-        //     var storage_helper = ValueStorageType.init(slot_key_offset);
-        //     try storage_helper.set_value(utils.ZERO_BYTES);
-        // }
     };
 }
 
@@ -217,10 +209,19 @@ pub fn SolStorage(comptime Self: type) type {
                     U256Storage => field.type.init(utils.u32ToBytes32(offset)),
                     AddressStorage => field.type.init(utils.u32ToBytes32(offset)),
                     BoolStorage => field.type.init(utils.u32ToBytes32(offset)),
+                    Bytes32Storage => field.type.init(utils.u32ToBytes32(offset)),
                     // Todo, support edge case.
                     else => blk: {
-                        const offset_bytes = utils.u32ToBytes32(offset);
-                        break :blk field.type.init(offset_bytes);
+                        @setEvalBranchQuota(100000);
+                        const type_name = @typeName(field.type);
+                        if (std.mem.indexOf(u8, type_name, "MappingStorage") != null) {
+                            const offset_bytes = utils.u32ToBytes32(offset);
+                            break :blk field.type.init(offset_bytes);
+                        } else if (std.mem.indexOf(u8, type_name, "EventEmitter") != null) {
+                            break :blk .{}; // Initialize event with empty struct
+                        } else {
+                            @compileError("Unsupported Solidity type: " ++ type_name);
+                        }
                     },
                 };
                 offset += 1;
