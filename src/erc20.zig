@@ -3,7 +3,7 @@ const utils = @import("utils.zig");
 const ValueStorage = @import("value_storage.zig");
 const U256Storage = ValueStorage.U256Storage;
 const AddressStorage = ValueStorage.AddressStorage;
-const MappingStorage1 = ValueStorage.MappingStorage1;
+const MappingStorage = ValueStorage.MappingStorage;
 const SolStorage = ValueStorage.SolStorage;
 
 const Address = ValueStorage.Address;
@@ -14,8 +14,8 @@ pub const ERC20 = struct {
     // Define state here
     total_supply: U256Storage,
     _owner: AddressStorage,
-    balances: MappingStorage1(Address, U256Storage),
-    allowances: MappingStorage1(Address, MappingStorage1(Address, U256Storage)),
+    balances: MappingStorage(Address, U256Storage),
+    allowances: MappingStorage(Address, MappingStorage(Address, U256Storage)),
 
     // // Define functions here
     // pub fn name() ![]const u8 {

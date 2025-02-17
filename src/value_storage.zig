@@ -88,7 +88,7 @@ const NestedMappingInfo = struct {
     nested_value_type: type,
 };
 
-pub fn MappingStorage1(comptime KeyType: type, comptime ValueStorageType: type) type {
+pub fn MappingStorage(comptime KeyType: type, comptime ValueStorageType: type) type {
     const value_inner_type: type = ValueStorageType.inner_type;
     const key_utils = utils.getValueUtils(KeyType);
     const value_utils = utils.getValueUtils(value_inner_type);
