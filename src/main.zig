@@ -27,19 +27,19 @@ export fn user_entrypoint(len: usize) i32 {
     const data = input[4..];
     utils.method_router(selector, data, &Contract) catch return 1;
 
-    // if (selector[0] == 0x01) {
-    //     // const padded_key: []u8 = utils.left_pad(selector[1..4], 32) catch return 1;
-    //     // const result = utils.read_storage(padded_key) catch return 1;
-    //     // utils.write_output(result);
-    //     _ = utils.get_msg_sender() catch return 1;
-    // } else if (selector[0] == 0x02) {
-    //     // const padded_key: []u8 = utils.left_pad(selector[1..4], 32) catch return 1;
-    //     // utils.write_storage(padded_key, data) catch return 1;
-    // } else {
-    //     // const padded_key: []u8 = utils.left_pad(selector[1..4], 32) catch return 1;
-    //     // input[0] = 0x99;
-    //     // utils.write_output(padded_key);
-    // }
+    if (selector[0] == 0x01) {
+        // const padded_key: []u8 = utils.left_pad(selector[1..4], 32) catch return 1;
+        // const result = utils.read_storage(padded_key) catch return 1;
+        // utils.write_output(result);
+        _ = utils.get_msg_sender() catch return 1;
+    } else if (selector[0] == 0x02) {
+        // const padded_key: []u8 = utils.left_pad(selector[1..4], 32) catch return 1;
+        // utils.write_storage(padded_key, data) catch return 1;
+    } else {
+        // const padded_key: []u8 = utils.left_pad(selector[1..4], 32) catch return 1;
+        // input[0] = 0x99;
+        // utils.write_output(padded_key);
+    }
     storage_flush_cache(false);
     return 0;
 }

@@ -24,6 +24,8 @@ const APPROVE_SELECTOR = [_]u8{ 0x09, 0x5e, 0xa7, 0xb3 }; // approve(address,uin
 const TRANSFER_FROM_SELECTOR = [_]u8{ 0x23, 0xb8, 0x72, 0xdd }; // transferFrom(address,address,uint256) 0x23b872dd
 const OWNER_SELECTOR = [_]u8{ 0x8d, 0xa5, 0xcb, 0x5b }; // owner() 0x8da5cb5b
 
+pub const ZERO_BYTES = [_]u8{0} ** 32;
+
 // Uses our custom WasmAllocator which is a simple modification over the wasm allocator
 // from the Zig standard library as of Zig 0.11.0.
 pub const allocator = std.mem.Allocator{
@@ -68,6 +70,12 @@ pub fn bytes32ToU256(bytes: [32]u8) u256 {
     return std.mem.readInt(u256, &bytes, .big);
 }
 
+pub fn bytes32ToBytes(bytes: [32]u8) ![]u8 {
+    const result = try allocator.alloc(u8, 32);
+    std.mem.copyBackwards(u8, result, &bytes);
+    return result;
+}
+
 pub fn bytesToBytes32(bytes: []const u8) ![32]u8 {
     if (bytes.len > 32) return error.InputTooLong;
 
@@ -93,6 +101,14 @@ pub fn u256ToBytes(value: u256) ![]u8 {
 
     const result = try allocator.alloc(u8, 32);
     std.mem.copyBackwards(u8, result, &temp);
+    return result;
+}
+
+pub fn u32ToBytes32(value: u32) [32]u8 {
+    var result: [32]u8 = [_]u8{0} ** 32;
+    var temp: [4]u8 = undefined;
+    std.mem.writeInt(u32, &temp, value, .big);
+    std.mem.copyForwards(u8, result[28..], &temp);
     return result;
 }
 
@@ -144,22 +160,6 @@ pub fn addressToBytes(address: ValueStorage.Address) ![]u8 {
     return result;
 }
 
-pub fn usizeToBytes(value: usize) ![]u8 {
-    var temp: [8]u8 = undefined;
-    const result = try allocator.alloc(u8, 32);
-
-    // Zero initialize
-    @memset(result, 0);
-
-    // Write usize in big endian
-    std.mem.writeInt(u64, &temp, value, .big);
-
-    // Copy to last 8 bytes
-    std.mem.copyForwards(u8, result[24..], &temp);
-
-    return result;
-}
-
 pub fn isSliceUndefined(slice: []const u8) bool {
     return slice.ptr == undefined or slice.len == 0;
 }
@@ -204,16 +204,41 @@ pub const U256Utils = struct {
     }
 };
 
+pub const VoidUtils = struct {
+    pub fn from_bytes(self: @This(), bytes: []u8) !u256 {
+        _ = self;
+        _ = bytes;
+        // Do nothing
+        return 0;
+    }
+
+    pub fn to_bytes(self: @This(), value: u256) ![]u8 {
+        _ = self;
+        _ = value;
+        // Do nothing
+        return []u8{0};
+    }
+};
+
+pub fn is_primitives(comptime T: type) bool {
+    return switch (T) {
+        u256 => true,
+        ValueStorage.Address => true,
+        else => false,
+    };
+}
+
 pub fn getValueUtils(comptime T: type) type {
     return switch (T) {
         u256 => U256Utils,
         ValueStorage.Address => AddressUtils,
-        else => @panic("Unsupported type for MappingStorage"),
+        else => VoidUtils,
     };
 }
 
+// Todo, implement a general use case method router
+// Currently this router only supports standard erc20 interface
 pub fn method_router(selector: [4]u8, data: []u8, contract: *erc20.ERC20) !void {
-    // _ = data;
     switch (@as(u32, selector[0]) << 24 | @as(u32, selector[1]) << 16 | @as(u32, selector[2]) << 8 | @as(u32, selector[3])) {
         @as(u32, INITIATE_SELECTOR[0]) << 24 | @as(u32, INITIATE_SELECTOR[1]) << 16 | @as(u32, INITIATE_SELECTOR[2]) << 8 | @as(u32, INITIATE_SELECTOR[3]) => {
             try contract.initiate(data);
@@ -234,17 +259,36 @@ pub fn method_router(selector: [4]u8, data: []u8, contract: *erc20.ERC20) !void 
         @as(u32, TRANSFER_SELECTOR[0]) << 24 | @as(u32, TRANSFER_SELECTOR[1]) << 16 | @as(u32, TRANSFER_SELECTOR[2]) << 8 | @as(u32, TRANSFER_SELECTOR[3]) => {
             // try stdout.print("transfer called\n", .{});
             // Add transfer logic here
+            const to = try bytesToAddress(data[0..32]);
+            const value = try bytesToU256(data[32..]);
+            const success = try contract.transfer(to, value);
+            if (!success) {
+                @panic("error transfer");
+            }
         },
         @as(u32, ALLOWANCE_SELECTOR[0]) << 24 | @as(u32, ALLOWANCE_SELECTOR[1]) << 16 | @as(u32, ALLOWANCE_SELECTOR[2]) << 8 | @as(u32, ALLOWANCE_SELECTOR[3]) => {
-            // try stdout.print("allowance called\n", .{});
-            // Add allowance logic here
+            const owner_addr = try bytesToAddress(data[0..32]);
+            const spender_addr = try bytesToAddress(data[32..64]);
+            const allowance = try contract.allowance(owner_addr, spender_addr);
+            const allowance_bytes = try u256ToBytes(allowance);
+            write_output(allowance_bytes);
         },
         @as(u32, APPROVE_SELECTOR[0]) << 24 | @as(u32, APPROVE_SELECTOR[1]) << 16 | @as(u32, APPROVE_SELECTOR[2]) << 8 | @as(u32, APPROVE_SELECTOR[3]) => {
-            // try stdout.print("approve called\n", .{});
-            // Add approve logic here
+            const spender = try bytesToAddress(data[0..32]);
+            const value = try bytesToU256(data[32..]);
+            const success = try contract.approve(spender, value);
+            if (!success) {
+                @panic("error approve");
+            }
         },
         @as(u32, TRANSFER_FROM_SELECTOR[0]) << 24 | @as(u32, TRANSFER_FROM_SELECTOR[1]) << 16 | @as(u32, TRANSFER_FROM_SELECTOR[2]) << 8 | @as(u32, TRANSFER_FROM_SELECTOR[3]) => {
-            // Add transferFrom logic here
+            const from = try bytesToAddress(data[0..32]);
+            const to = try bytesToAddress(data[32..64]);
+            const value = try bytesToU256(data[64..]);
+            const success = try contract.transferFrom(from, to, value);
+            if (!success) {
+                @panic("error transferFrom");
+            }
         },
         @as(u32, OWNER_SELECTOR[0]) << 24 | @as(u32, OWNER_SELECTOR[1]) << 16 | @as(u32, OWNER_SELECTOR[2]) << 8 | @as(u32, OWNER_SELECTOR[3]) => {
             const owner = try contract.owner();
@@ -256,9 +300,10 @@ pub fn method_router(selector: [4]u8, data: []u8, contract: *erc20.ERC20) !void 
     }
 }
 
-pub fn keccak256(data: []u8) ![]u8 {
-    const output = try allocator.alloc(u8, 32);
-    native_keccak256(@ptrCast(data), data.len, @ptrCast(output));
+pub fn keccak256(data: []u8) ![32]u8 {
+    const hashed = try allocator.alloc(u8, 32);
+    native_keccak256(@ptrCast(data), data.len, @ptrCast(hashed));
+    const output = try bytesToBytes32(hashed);
     return output;
 }
 
