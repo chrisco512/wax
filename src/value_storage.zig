@@ -30,9 +30,6 @@ pub const U256Storage = struct {
         const offset_bytes = try utils.bytes32ToBytes(self.offset);
         const value_bytes = try utils.u256ToBytes(value);
         try utils.write_storage(offset_bytes, value_bytes);
-        if (utils.isSliceUndefined(self.cache)) {
-            self.cache = utils.allocator.alloc(u8, 32) catch return error.OutOfMemory;
-        }
         self.cache = value_bytes;
     }
 
@@ -61,9 +58,6 @@ pub const BoolStorage = struct {
         const offset_bytes = try utils.bytes32ToBytes(self.offset);
         const value_bytes = try utils.boolToBytes(value);
         try utils.write_storage(offset_bytes, value_bytes);
-        if (utils.isSliceUndefined(self.cache)) {
-            self.cache = utils.allocator.alloc(u8, 1) catch return error.OutOfMemory;
-        }
         self.cache = value_bytes;
     }
 
@@ -92,9 +86,6 @@ pub const AddressStorage = struct {
         const offset_bytes = try utils.bytes32ToBytes(self.offset);
         const address_bytes = try utils.addressToBytes(value);
         try utils.write_storage(offset_bytes, address_bytes);
-        if (utils.isSliceUndefined(self.cache)) {
-            self.cache = utils.allocator.alloc(u8, 32) catch return error.OutOfMemory;
-        }
         self.cache = address_bytes;
     }
 
@@ -124,9 +115,6 @@ pub const Bytes32Storage = struct {
         const offset_bytes = try utils.bytes32ToBytes(self.offset);
         const value_bytes = try utils.bytes32ToBytes(value);
         try utils.write_storage(offset_bytes, value_bytes);
-        if (utils.isSliceUndefined(self.cache)) {
-            self.cache = utils.allocator.alloc(u8, 32) catch return error.OutOfMemory;
-        }
         self.cache = value_bytes;
     }
 
