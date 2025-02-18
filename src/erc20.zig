@@ -1,7 +1,8 @@
 const std = @import("std");
-const utils = @import("utils.zig");
-const ValueStorage = @import("value_storage.zig");
-const EventUtils = @import("event.zig");
+const utils = @import("./tiny-zig-sdk-wax/utils.zig");
+const hostio = @import("./tiny-zig-sdk-wax/hostio.zig");
+const ValueStorage = @import("./tiny-zig-sdk-wax/value_storage.zig");
+const EventUtils = @import("./tiny-zig-sdk-wax/event.zig");
 const U256Storage = ValueStorage.U256Storage;
 const AddressStorage = ValueStorage.AddressStorage;
 const MappingStorage = ValueStorage.MappingStorage;
@@ -24,18 +25,18 @@ pub const ERC20 = struct {
 
     // Define event with EventEmitter
     Transfer: EventEmitter("Transfer", struct {
-        Indexed(Address), // Indexed data
-        Indexed(Address), // Indexed data
-        u256, // Unindexed data
+        Indexed(Address), // Indexed data: from
+        Indexed(Address), // Indexed data: to
+        u256, // Unindexed data: amount
     }),
     Approval: EventEmitter("Approval", struct {
-        Indexed(Address), // Indexed data
-        Indexed(Address), // Indexed data
-        u256, // Unindexed data
+        Indexed(Address), // Indexed data: owner
+        Indexed(Address), // Indexed data: spender
+        u256, // Unindexed data: amount
     }),
     Initiated: EventEmitter("Initiated", struct {
-        Address,
-        u256,
+        Address, // Unindexed data: sender
+        u256, // Unindexed data: amount
     }),
 
     // Define function here
@@ -52,12 +53,12 @@ pub const ERC20 = struct {
         }
 
         // Set owner, and mint total_supply number of tokens to the owner
-        const sender = try utils.get_msg_sender();
+        const sender = try hostio.get_msg_sender();
         try self.total_supply.set_value(total_supply);
         try self._owner.set_value(sender);
         var balances_setter = try self.balances.setter(sender);
         try balances_setter.set_value(total_supply);
-        const block_number = utils.get_block_number();
+        const block_number = hostio.get_block_number();
 
         // emit initiated event
         try self.Initiated.emit(.{
@@ -111,12 +112,12 @@ pub const ERC20 = struct {
     }
 
     pub fn transfer(self: *@This(), to: Address, value: u256) !bool {
-        const sender = try utils.get_msg_sender();
+        const sender = try hostio.get_msg_sender();
         return try _transfer(self, sender, to, value);
     }
 
     pub fn transferFrom(self: *@This(), from: Address, to: Address, value: u256) !bool {
-        const msg_sender = try utils.get_msg_sender();
+        const msg_sender = try hostio.get_msg_sender();
         // Get value from allowances, this is nested mapping, so needs to call twice setter
         var from_allowance_map = try self.allowances.setter(from);
         var from_sender_allowance = try from_allowance_map.setter(msg_sender);
@@ -133,7 +134,7 @@ pub const ERC20 = struct {
     }
 
     pub fn approve(self: *@This(), spender: Address, value: u256) !bool {
-        const sender = try utils.get_msg_sender();
+        const sender = try hostio.get_msg_sender();
         const sender_balance = try self.balances.get(sender);
 
         var sender_allowance_map = try self.allowances.setter(sender);

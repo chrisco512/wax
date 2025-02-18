@@ -1,19 +1,9 @@
 const std = @import("std");
 const WasmAllocator = @import("WasmAllocator.zig");
 const ValueStorage = @import("value_storage.zig");
-const erc20 = @import("erc20.zig");
+const erc20 = @import("../erc20.zig");
+const hostio = @import("hostio.zig");
 const crypto = std.crypto;
-
-pub extern "vm_hooks" fn read_args(dest: *u8) void;
-pub extern "vm_hooks" fn write_result(data: *const u8, len: usize) void;
-pub extern "vm_hooks" fn storage_cache_bytes32(key: *const u8, value: *const u8) void;
-pub extern "vm_hooks" fn storage_flush_cache(clear: bool) void;
-pub extern "vm_hooks" fn storage_load_bytes32(key: *const u8, dest: *u8) void;
-pub extern "vm_hooks" fn native_keccak256(bytes: *const u8, len: usize, output: *u8) void;
-pub extern "vm_hooks" fn block_number() u64;
-pub extern "vm_hooks" fn msg_sender(sender: *const u8) void;
-pub extern "vm_hooks" fn emit_log(data: *const u8, len: usize, topics: usize) void;
-pub extern "vm_hooks" fn block_timestamp() u64;
 
 // Standard ERC20 function selectors (first 4 bytes of keccak256 hash of function signatures)
 const INITIATE_SELECTOR = [_]u8{ 0x79, 0x01, 0xea, 0x78 }; // initiate(uint256) 0x7901ea78
@@ -37,37 +27,12 @@ pub const allocator = std.mem.Allocator{
     .vtable = &WasmAllocator.vtable,
 };
 
-// Reads input arguments from an external, WASM import into a dynamic slice.
-pub fn get_input(len: usize) ![]u8 {
-    const input = try allocator.alloc(u8, len);
-    read_args(@ptrCast(input));
-    return input;
-}
-
-// Outputs data as bytes via a write_result, external WASM import.
-pub fn write_output(data: []u8) void {
-    write_result(@ptrCast(data), data.len);
-}
-
 // For slices
 pub fn left_pad(slice: []u8, size: usize) ![]u8 {
     const output = try allocator.alloc(u8, size);
     const padding = size - slice.len;
     std.mem.copyForwards(u8, output[padding..], slice);
     return output;
-}
-
-pub fn read_storage(key: []u8) ![]u8 {
-    const key_to_read = try left_pad(key, 32);
-    const output = try allocator.alloc(u8, 32);
-    storage_load_bytes32(@ptrCast(key_to_read), @ptrCast(output));
-    return output;
-}
-
-pub fn write_storage(key: []u8, value: []u8) !void {
-    const key_to_set = try left_pad(key, 32);
-    const value_to_set = try left_pad(value, 32);
-    storage_cache_bytes32(@ptrCast(key_to_set), @ptrCast(value_to_set));
 }
 
 pub fn bytes32ToU256(bytes: [32]u8) u256 {
@@ -336,7 +301,7 @@ pub fn method_router(selector: [4]u8, data: []u8, contract: *erc20.ERC20) !void 
         },
         @as(u32, TOTAL_SUPPLY_SELECTOR[0]) << 24 | @as(u32, TOTAL_SUPPLY_SELECTOR[1]) << 16 | @as(u32, TOTAL_SUPPLY_SELECTOR[2]) << 8 | @as(u32, TOTAL_SUPPLY_SELECTOR[3]) => {
             const total_supply = try contract.totalSupply();
-            write_output(total_supply);
+            hostio.write_output(total_supply);
         },
         @as(u32, BALANCE_OF_SELECTOR[0]) << 24 | @as(u32, BALANCE_OF_SELECTOR[1]) << 16 | @as(u32, BALANCE_OF_SELECTOR[2]) << 8 | @as(u32, BALANCE_OF_SELECTOR[3]) => {
             // const decoded = try decoder.decodeAbiFunction([20]u8, allocator, encoded, .{});
@@ -345,7 +310,7 @@ pub fn method_router(selector: [4]u8, data: []u8, contract: *erc20.ERC20) !void 
             const address = try bytesToAddress(data);
             const balance = try contract.balanceOf(address);
             const balance_bytes = try u256ToBytes(balance);
-            write_output(balance_bytes);
+            hostio.write_output(balance_bytes);
         },
         @as(u32, TRANSFER_SELECTOR[0]) << 24 | @as(u32, TRANSFER_SELECTOR[1]) << 16 | @as(u32, TRANSFER_SELECTOR[2]) << 8 | @as(u32, TRANSFER_SELECTOR[3]) => {
             // try stdout.print("transfer called\n", .{});
@@ -362,7 +327,7 @@ pub fn method_router(selector: [4]u8, data: []u8, contract: *erc20.ERC20) !void 
             const spender_addr = try bytesToAddress(data[32..64]);
             const allowance = try contract.allowance(owner_addr, spender_addr);
             const allowance_bytes = try u256ToBytes(allowance);
-            write_output(allowance_bytes);
+            hostio.write_output(allowance_bytes);
         },
         @as(u32, APPROVE_SELECTOR[0]) << 24 | @as(u32, APPROVE_SELECTOR[1]) << 16 | @as(u32, APPROVE_SELECTOR[2]) << 8 | @as(u32, APPROVE_SELECTOR[3]) => {
             const spender = try bytesToAddress(data[0..32]);
@@ -385,12 +350,12 @@ pub fn method_router(selector: [4]u8, data: []u8, contract: *erc20.ERC20) !void 
             const owner = try contract.owner();
             const address_utils = AddressUtils{};
             const owner_bytes = try address_utils.to_bytes(owner);
-            write_output(owner_bytes);
+            hostio.write_output(owner_bytes);
         },
         @as(u32, DECIMALS_SELECTOR[0]) << 24 | @as(u32, DECIMALS_SELECTOR[1]) << 16 | @as(u32, DECIMALS_SELECTOR[2]) << 8 | @as(u32, DECIMALS_SELECTOR[3]) => {
             const decimals = contract.decimals();
             const decimals_bytes = try u32ToBytes(decimals);
-            write_output(decimals_bytes);
+            hostio.write_output(decimals_bytes);
         },
         // @as(u32, NAME_SELECTOR[0]) << 24 | @as(u32, NAME_SELECTOR[1]) << 16 | @as(u32, NAME_SELECTOR[2]) << 8 | @as(u32, NAME_SELECTOR[3]) => {
         //     const name = try contract.name();
@@ -406,14 +371,7 @@ pub fn method_router(selector: [4]u8, data: []u8, contract: *erc20.ERC20) !void 
     }
 }
 
-pub fn keccak256(data: []u8) ![32]u8 {
-    const hashed = try allocator.alloc(u8, 32);
-    native_keccak256(@ptrCast(data), data.len, @ptrCast(hashed));
-    const output = try bytesToBytes32(hashed);
-    return output;
-}
-
-// Instead of above keccak256() running on runtime,
+// Instead of keccak256() in hostio.zig running on runtime,
 // this fn will only be used to compute the keccak256 hash during compile time
 // Comptime fn for computing the keccak256 hash of a string
 pub fn hashAtComptime(comptime data: []const u8) [32]u8 {
@@ -423,41 +381,4 @@ pub fn hashAtComptime(comptime data: []const u8) [32]u8 {
         std.crypto.hash.sha3.Keccak256.hash(data, &hash, .{});
         return hash;
     }
-}
-
-pub fn get_msg_sender() !ValueStorage.Address {
-    const sender = try allocator.alloc(u8, 32);
-    msg_sender(@ptrCast(sender));
-    return try bytesToAddress(sender);
-}
-
-pub fn emit_evm_log(topics: [][32]u8, data: []u8) !void {
-    if (topics.len > 4) {
-        @panic("Too many topics");
-    }
-    const topic_bytes_len = 32 * topics.len;
-    const total_bytes_len = topic_bytes_len + data.len;
-    var bytes = try allocator.alloc(u8, total_bytes_len);
-    defer allocator.free(bytes);
-
-    // Copy each topic's bytes sequentially
-    var i: usize = 0;
-    for (topics) |topic| {
-        std.mem.copyForwards(u8, bytes[i * 32 .. (i + 1) * 32], &topic);
-        i += 1;
-    }
-
-    // Copy data after topics
-    std.mem.copyForwards(u8, bytes[topic_bytes_len..], data);
-    emit_log(@ptrCast(bytes), bytes.len, topics.len);
-}
-
-pub fn get_block_timestamp() u256 {
-    const result: u256 = block_timestamp();
-    return result;
-}
-
-pub fn get_block_number() u256 {
-    const result: u256 = block_number();
-    return result;
 }

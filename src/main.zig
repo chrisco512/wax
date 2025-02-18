@@ -1,8 +1,8 @@
 const std = @import("std");
-const WasmAllocator = @import("WasmAllocator.zig");
-const utils = @import("utils.zig");
+const WasmAllocator = @import("./tiny-zig-sdk-wax/WasmAllocator.zig");
+const utils = @import("./tiny-zig-sdk-wax/utils.zig");
 const erc20 = @import("erc20.zig");
-
+const hostio = @import("./tiny-zig-sdk-wax/hostio.zig");
 // External imports provided to all WASM programs on Stylus. These functions
 // can be use to read input arguments coming into the program and output arguments to callers.
 
@@ -18,7 +18,7 @@ var Contract = blk: {
 // The main entrypoint to use for execution of the Stylus WASM program.
 export fn user_entrypoint(len: usize) i32 {
     // Expects the input is a u16 encoded as little endian bytes.
-    const input = utils.get_input(len) catch return 1;
+    const input = hostio.get_input(len) catch return 1;
     if (input.len < 4) {
         @panic("Incorect input length");
     }

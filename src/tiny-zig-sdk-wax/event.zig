@@ -1,5 +1,6 @@
 const std = @import("std");
 const utils = @import("utils.zig");
+const hostio = @import("hostio.zig");
 
 pub fn Indexed(comptime T: type) type {
     return struct {
@@ -13,8 +14,7 @@ pub fn Indexed(comptime T: type) type {
 fn isIndexed(comptime T: type) bool {
     const type_info = @typeInfo(T);
     return switch (type_info) {
-        // event.Indexed([20]u8) so we need 6-13
-        .Struct => std.mem.eql(u8, @typeName(T)[6..13], "Indexed"),
+        .Struct => std.mem.indexOf(u8, @typeName(T), "event.Indexed") != null,
         else => false,
     };
 }
@@ -83,7 +83,7 @@ pub fn EventEmitter(comptime name: []const u8, comptime Params: type) type {
                 }
             }
 
-            try utils.emit_evm_log(topics.items, data.items);
+            try hostio.emit_evm_log(topics.items, data.items);
         }
     };
 }

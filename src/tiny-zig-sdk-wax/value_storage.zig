@@ -1,6 +1,6 @@
 const std = @import("std");
 const utils = @import("utils.zig");
-
+const hostio = @import("hostio.zig");
 pub const Address: type = [20]u8;
 
 const AddressUtils = utils.AddressUtils;
@@ -29,14 +29,14 @@ pub const U256Storage = struct {
     pub fn set_value(self: *@This(), value: u256) !void {
         const offset_bytes = try utils.bytes32ToBytes(self.offset);
         const value_bytes = try utils.u256ToBytes(value);
-        try utils.write_storage(offset_bytes, value_bytes);
+        try hostio.write_storage(offset_bytes, value_bytes);
         self.cache = value_bytes;
     }
 
     pub fn get_value(self: *@This()) !u256 {
         if (utils.isSliceUndefined(self.cache)) {
             const offset_bytes = try utils.bytes32ToBytes(self.offset);
-            self.cache = try utils.read_storage(offset_bytes);
+            self.cache = try hostio.read_storage(offset_bytes);
         }
         return utils.bytesToU256(self.cache);
     }
@@ -57,14 +57,14 @@ pub const BoolStorage = struct {
     pub fn set_value(self: *@This(), value: bool) !void {
         const offset_bytes = try utils.bytes32ToBytes(self.offset);
         const value_bytes = try utils.boolToBytes(value);
-        try utils.write_storage(offset_bytes, value_bytes);
+        try hostio.write_storage(offset_bytes, value_bytes);
         self.cache = value_bytes;
     }
 
     pub fn get_value(self: *@This()) !bool {
         if (utils.isSliceUndefined(self.cache)) {
             const offset_bytes = try utils.bytes32ToBytes(self.offset);
-            self.cache = try utils.read_storage(offset_bytes);
+            self.cache = try hostio.read_storage(offset_bytes);
         }
         return utils.bytesToBool(self.cache);
     }
@@ -85,14 +85,14 @@ pub const AddressStorage = struct {
     pub fn set_value(self: *@This(), value: Address) !void {
         const offset_bytes = try utils.bytes32ToBytes(self.offset);
         const address_bytes = try utils.addressToBytes(value);
-        try utils.write_storage(offset_bytes, address_bytes);
+        try hostio.write_storage(offset_bytes, address_bytes);
         self.cache = address_bytes;
     }
 
     pub fn get_value(self: *@This()) !Address {
         if (utils.isSliceUndefined(self.cache)) {
             const offset_bytes = try utils.bytes32ToBytes(self.offset);
-            self.cache = try utils.read_storage(offset_bytes);
+            self.cache = try hostio.read_storage(offset_bytes);
         }
         const result = utils.bytesToAddress(self.cache);
         return result;
@@ -114,14 +114,14 @@ pub const Bytes32Storage = struct {
     pub fn set_value(self: *@This(), value: [32]u8) !void {
         const offset_bytes = try utils.bytes32ToBytes(self.offset);
         const value_bytes = try utils.bytes32ToBytes(value);
-        try utils.write_storage(offset_bytes, value_bytes);
+        try hostio.write_storage(offset_bytes, value_bytes);
         self.cache = value_bytes;
     }
 
     pub fn get_value(self: *@This()) ![32]u8 {
         if (utils.isSliceUndefined(self.cache)) {
             const offset_bytes = try utils.bytes32ToBytes(self.offset);
-            self.cache = try utils.read_storage(offset_bytes);
+            self.cache = try hostio.read_storage(offset_bytes);
         }
         var result: [32]u8 = undefined;
         std.mem.copyForwards(u8, &result, self.cache);
@@ -159,7 +159,7 @@ pub fn MappingStorage(comptime KeyType: type, comptime ValueStorageType: type) t
             std.mem.copyForwards(u8, concat[0..32], &slot);
             std.mem.copyForwards(u8, concat[32..], key);
 
-            return utils.keccak256(concat);
+            return hostio.keccak256(concat);
         }
 
         pub fn setter(self: *@This(), key: KeyType) !ValueStorageType {
