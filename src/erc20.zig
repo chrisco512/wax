@@ -33,7 +33,12 @@ pub const ERC20 = struct {
         Indexed(Address), // Indexed data
         u256, // Unindexed data
     }),
+    Initiated: EventEmitter("Initiated", struct {
+        Address,
+        u256,
+    }),
 
+    // Define function here
     pub fn decimals(_: *@This()) u8 {
         return DECIMALS;
     }
@@ -52,6 +57,13 @@ pub const ERC20 = struct {
         try self._owner.set_value(sender);
         var balances_setter = try self.balances.setter(sender);
         try balances_setter.set_value(total_supply);
+        const block_number = utils.get_block_number();
+
+        // emit initiated event
+        try self.Initiated.emit(.{
+            sender,
+            block_number,
+        });
     }
 
     pub fn owner(self: *@This()) !Address {

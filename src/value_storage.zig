@@ -1,7 +1,6 @@
 const std = @import("std");
 const utils = @import("utils.zig");
 
-const HashMap = std.HashMap;
 pub const Address: type = [20]u8;
 
 const AddressUtils = utils.AddressUtils;

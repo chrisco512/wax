@@ -13,6 +13,7 @@ pub extern "vm_hooks" fn native_keccak256(bytes: *const u8, len: usize, output: 
 pub extern "vm_hooks" fn block_number() u64;
 pub extern "vm_hooks" fn msg_sender(sender: *const u8) void;
 pub extern "vm_hooks" fn emit_log(data: *const u8, len: usize, topics: usize) void;
+pub extern "vm_hooks" fn block_timestamp() u64;
 
 // Standard ERC20 function selectors (first 4 bytes of keccak256 hash of function signatures)
 const INITIATE_SELECTOR = [_]u8{ 0x79, 0x01, 0xea, 0x78 }; // initiate(uint256) 0x7901ea78
@@ -449,4 +450,14 @@ pub fn emit_evm_log(topics: [][32]u8, data: []u8) !void {
     // Copy data after topics
     std.mem.copyForwards(u8, bytes[topic_bytes_len..], data);
     emit_log(@ptrCast(bytes), bytes.len, topics.len);
+}
+
+pub fn get_block_timestamp() u256 {
+    const result: u256 = block_timestamp();
+    return result;
+}
+
+pub fn get_block_number() u256 {
+    const result: u256 = block_number();
+    return result;
 }
