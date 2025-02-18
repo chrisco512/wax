@@ -257,6 +257,7 @@ pub fn abi_encode(comptime T: type, value: T) ![32]u8 {
     return result;
 }
 
+// @Copyright: resue code in https://github.com/chrisco512/zigitrum
 // Converts a Zig type to a Solidity ABI type string
 pub fn zigToSolidityType(T: type) []const u8 {
     return switch (@typeInfo(T)) {
@@ -371,6 +372,7 @@ pub fn method_router(selector: [4]u8, data: []u8, contract: *erc20.ERC20) !void 
     }
 }
 
+// @Copyright: resue code in https://github.com/chrisco512/zigitrum
 // Instead of keccak256() in hostio.zig running on runtime,
 // this fn will only be used to compute the keccak256 hash during compile time
 // Comptime fn for computing the keccak256 hash of a string

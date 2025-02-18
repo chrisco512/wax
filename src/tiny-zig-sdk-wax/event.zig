@@ -19,6 +19,7 @@ fn isIndexed(comptime T: type) bool {
     };
 }
 
+// @Copyright: resue code in https://github.com/chrisco512/zigitrum
 pub fn getEventSelector(comptime name: []const u8, Params: type) ![32]u8 {
     // building selector as compile time
     const signature = comptime blk: {
