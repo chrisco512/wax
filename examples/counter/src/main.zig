@@ -58,6 +58,7 @@ export fn user_entrypoint() u32 {
             .number = 69,
         },
         .calldata = &.{},
+        .return_data = &.{},
     };
 
     // const ctx = createContext(Contract.init(), calldata);
