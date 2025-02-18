@@ -141,13 +141,12 @@ pub fn MappingStorage(comptime KeyType: type, comptime ValueStorageType: type) t
 
     return struct {
         offset: [32]u8,
-        cache: std.AutoHashMap(KeyType, ValueStorageType),
         converter: converter_type,
         const inner_type: type = @TypeOf(@This());
         const ValueInnerType: type = value_inner_type;
 
         pub fn init(offset: [32]u8) @This() {
-            return .{ .offset = offset, .cache = undefined, .converter = .{
+            return .{ .offset = offset, .converter = .{
                 .key_utils = key_utils{},
                 .value_utils = value_utils{},
             } };
@@ -186,6 +185,67 @@ pub fn MappingStorage(comptime KeyType: type, comptime ValueStorageType: type) t
     };
 }
 
+pub fn VecStorage(comptime ElementStorageType: type) type {
+    const element_inner_type = ElementStorageType.inner_type;
+
+    return struct {
+        offset: [32]u8,
+        length_storage: U256Storage,
+        const inner_type: type = []element_inner_type;
+
+        pub fn init(offset_value: [32]u8) @This() {
+            return .{
+                .offset = offset_value,
+                .length_storage = U256Storage.init(offset_value),
+            };
+        }
+
+        fn compute_array_slot(slot: [32]u8, index: u256) ![32]u8 {
+            const index_bytes = try utils.u256ToBytes(index);
+            var concat = try utils.allocator.alloc(u8, 64);
+            defer utils.allocator.free(concat);
+
+            std.mem.copyForwards(u8, concat[0..32], &slot);
+            std.mem.copyForwards(u8, concat[32..], index_bytes);
+
+            return try hostio.keccak256(concat);
+        }
+
+        pub fn length(self: *@This()) !u256 {
+            return try self.length_storage.get_value();
+        }
+
+        pub fn push(self: *@This(), value: element_inner_type) !void {
+            const len = try self.length();
+            // Update length
+            try self.length_storage.set_value(len + 1);
+
+            // Store new element using element storage helper
+            const slot = try compute_array_slot(self.offset, len);
+            var element_storage = ElementStorageType.init(slot);
+            try element_storage.set_value(value);
+        }
+
+        pub fn get(self: *@This(), index: u256) !element_inner_type {
+            const len = try self.length();
+            if (index >= len) return error.IndexOutOfBounds;
+
+            const slot = try compute_array_slot(self.offset, index);
+            var element_storage = ElementStorageType.init(slot);
+            return try element_storage.get_value();
+        }
+
+        pub fn set(self: *@This(), index: u256, value: element_inner_type) !void {
+            const len = try self.length();
+            if (index >= len) return error.IndexOutOfBounds;
+
+            const slot = try compute_array_slot(self.offset, index);
+            var element_storage = ElementStorageType.init(slot);
+            try element_storage.set_value(value);
+        }
+    };
+}
+
 // Define mixin for shared initialization behavior
 pub fn SolStorage(comptime Self: type) type {
     return struct {
@@ -202,7 +262,11 @@ pub fn SolStorage(comptime Self: type) type {
                     else => blk: {
                         @setEvalBranchQuota(100000);
                         const type_name = @typeName(field.type);
+                        // @compileLog("type_name: {}", .{type_name});
                         if (std.mem.indexOf(u8, type_name, "MappingStorage") != null) {
+                            const offset_bytes = utils.u32ToBytes32(offset);
+                            break :blk field.type.init(offset_bytes);
+                        } else if (std.mem.indexOf(u8, type_name, "VecStorage") != null) {
                             const offset_bytes = utils.u32ToBytes32(offset);
                             break :blk field.type.init(offset_bytes);
                         } else if (std.mem.indexOf(u8, type_name, "EventEmitter") != null) {

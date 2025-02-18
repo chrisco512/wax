@@ -7,6 +7,7 @@ const U256Storage = ValueStorage.U256Storage;
 const AddressStorage = ValueStorage.AddressStorage;
 const MappingStorage = ValueStorage.MappingStorage;
 const SolStorage = ValueStorage.SolStorage;
+const VecStorage = ValueStorage.VecStorage;
 const EventEmitter = EventUtils.EventEmitter;
 const Indexed = EventUtils.Indexed;
 const Address = ValueStorage.Address;
