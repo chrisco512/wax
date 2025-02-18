@@ -20,7 +20,7 @@ fn isIndexed(comptime T: type) bool {
 }
 
 pub fn getEventSelector(comptime name: []const u8, Params: type) ![32]u8 {
-    // Move string building to comptime block
+    // building selector as compile time
     const signature = comptime blk: {
         var sig: []const u8 = name;
         sig = sig ++ "(";
@@ -37,6 +37,7 @@ pub fn getEventSelector(comptime name: []const u8, Params: type) ![32]u8 {
         }
         sig = sig ++ ")";
 
+        // We shouldn't use hostio.keccak256 here, because this is running on compile time
         break :blk utils.hashAtComptime(sig);
     };
     return signature;

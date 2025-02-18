@@ -6,6 +6,7 @@ pub const Address: type = [20]u8;
 const AddressUtils = utils.AddressUtils;
 const U256Utils = utils.U256Utils;
 
+// This list is the state varibles what we support now for user to declare on contracts.
 pub const SolStorageType = enum {
     U256Storage,
     BoolStorage,
@@ -178,7 +179,7 @@ pub fn MappingStorage(comptime KeyType: type, comptime ValueStorageType: type) t
             return result;
         }
 
-        // This will only be called when mapping is nested.
+        // This will only be called when mapping is nested. (deprecated now)
         pub fn get_value(self: *@This()) !ValueInnerType {
             return self;
         }
