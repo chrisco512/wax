@@ -138,15 +138,14 @@ pub const ERC20 = struct {
         const sender = try hostio.get_msg_sender();
         const sender_balance = try self.balances.get(sender);
 
-        var sender_allowance_map = try self.allowances.setter(sender);
-        var sender_spender_allowance = try sender_allowance_map.setter(spender);
-
-        const sender_spender_allowance_value = try sender_spender_allowance.get_value();
         if (sender_balance < value) {
             return false;
         }
-        const new_sender_allowance = sender_spender_allowance_value + value;
-        try sender_spender_allowance.set_value(new_sender_allowance);
+
+        var sender_allowance_map = try self.allowances.setter(sender);
+        var sender_spender_allowance = try sender_allowance_map.setter(spender);
+
+        try sender_spender_allowance.set_value(value);
         // emit Approval event
         try self.Approval.emit(.{
             Indexed(Address){ .value = sender },
