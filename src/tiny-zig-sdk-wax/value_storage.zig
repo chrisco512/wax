@@ -7,13 +7,7 @@ const AddressUtils = utils.AddressUtils;
 const U256Utils = utils.U256Utils;
 
 // This list is the state varibles what we support now for user to declare on contracts.
-pub const SolStorageType = enum {
-    U256Storage,
-    BoolStorage,
-    AddressStorage,
-    Bytes32Storage,
-    MappingStorage,
-};
+pub const SolStorageType = enum { U256Storage, BoolStorage, AddressStorage, Bytes32Storage, MappingStorage, VecStorage };
 
 pub const U256Storage = struct {
     offset: [32]u8,
