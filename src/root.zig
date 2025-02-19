@@ -25,6 +25,14 @@ pub fn zigToSolidityType(comptime T: type) []const u8 {
                 else => @compileError("Unsupported unsigned integer type"),
             },
         },
+        .bool => "bool",
+        .array => |arr| if (arr.child == u8 and arr.len > 0)
+            "bytes" ++ std.fmt.comptimePrint("{}", .{arr.len})
+        else
+            zigToSolidityType(arr.child) ++ "[" ++ std.fmt.comptimePrint("{}", .{arr.len}) ++ "]",
+        .pointer => |p| if (p.size == .slice and p.child == u8) "bytes" else zigToSolidityType(p.child) ++ "[]",
+        .@"struct" => |s| if (s.is_tuple) "tuple" else @compileError("Named structs need explicit Solidity mapping"),
+        .@"enum" => "uint8", // Simplest case; extend if needed
         .void => "",
         else => @compileError("Unsupported type: " ++ @typeName(T)),
     };
@@ -92,6 +100,7 @@ pub fn hashAtComptime(comptime data: []const u8) [32]u8 {
 // Context struct contains vm data like block number, timestamp, etc
 // Plus access to storage via Context.store
 pub const Context = struct {
+    allocator: std.mem.Allocator,
     block: struct {
         number: u256,
     },
@@ -171,7 +180,8 @@ pub fn decodeHandlerArgs(comptime handler: anytype, ctx: *const Context) !getPar
 
     // Decode each argument from calldata, skipping context param
     inline for (handler_info.params[1..], 0..) |param, i| {
-        args[i + 1] = try decodeByType(param.type.?, ctx.calldata, &byte_index);
+        // std.debug.print("Decoding param {d} at byte_index {d}\n", .{ i, byte_index });
+        args[i + 1] = try decodeByType(param.type.?, ctx, &byte_index);
     }
 
     return args;
@@ -199,7 +209,8 @@ pub fn decodeAndCallHandler(comptime handler: anytype, ctx: *const Context) !voi
 
 const ABI_SLOT_SIZE = 32;
 
-pub fn decodeByType(comptime T: type, bytes: []const u8, index: *usize) !T {
+pub fn decodeByType(comptime T: type, ctx: *const Context, index: *usize) !T {
+    const bytes = ctx.calldata;
     const new_index = index.* + ABI_SLOT_SIZE;
     if (bytes.len < new_index) return error.NotEnoughBytes;
 
@@ -252,7 +263,7 @@ pub fn decodeByType(comptime T: type, bytes: []const u8, index: *usize) !T {
                 var result: [arr.len]arr.child = undefined;
                 index.* = new_index; // move past head
                 for (&result) |*item| {
-                    item.* = try decodeByType(arr.child, bytes, index); // recursive call updates index
+                    item.* = try decodeByType(arr.child, ctx, index); // recursive call updates index
                 }
                 break :blk result;
             } else { // Dynamic array T[]
@@ -261,20 +272,40 @@ pub fn decodeByType(comptime T: type, bytes: []const u8, index: *usize) !T {
                 const result: []arr.child = @as([*]arr.child, @ptrFromInt(0))[0..len];
                 var sub_index: usize = offset + 32; // start of data
                 for (result) |*item| {
-                    item.* = try decodeByType(arr.child, bytes, &sub_index);
+                    item.* = try decodeByType(arr.child, ctx, &sub_index);
                 }
                 break :blk result;
             }
         },
         .pointer => |p| blk: {
-            if (p.size == .slice and ptr.child == u8) { // string or bytes
-                const offset = try readOffset(bytes, index); // updates index by 32
-                const len = try readLength(bytes, offset);
-                if (bytes.len < offset + 32 + len) return error.NotEnoughBytes;
-                // Index stays at the end of the offset slot
-                break :blk bytes[offset + 32 .. offset + 32 + len];
+            if (p.size == .slice) { // string or bytes
+                if (p.child == u8) {
+                    const offset = try readOffset(bytes, index); // updates index by 32
+                    const len = try readLength(bytes, offset);
+                    if (bytes.len < offset + 32 + len) return error.NotEnoughBytes;
+                    // Index stays at the end of the offset slot
+                    break :blk bytes[offset + 32 .. offset + 32 + len];
+                } else {
+                    // Handle other slice types (e.g., []u256)
+                    const offset = try readOffset(bytes, index);
+                    const len = try readLength(bytes, offset);
+                    const result = try ctx.allocator.alloc(p.child, len);
+                    var sub_index: usize = offset + 32;
+                    for (result) |*item| {
+                        item.* = try decodeByType(p.child, ctx, &sub_index);
+                    }
+                    break :blk result;
+                }
             }
             @compileError("Only slice pointers to u8 supported");
+        },
+        .@"struct" => |struct_info| blk: {
+            var result: T = undefined;
+            inline for (struct_info.fields) |field| {
+                const FieldType = field.type;
+                @field(result, field.name) = try decodeByType(FieldType, ctx, index); // recursive call updates index
+            }
+            break :blk result;
         },
         else => @compileError("Unsupported type for decoding: " ++ @typeName(T)),
     };
@@ -346,17 +377,41 @@ pub fn encodeByType(comptime T: type, value: T, buffer: []u8, index: *usize) !vo
             }
         },
         .pointer => |p| {
-            if (p.size == .slice and p.child == u8) { // String or bytes
-                const data_start = index.* + ABI_SLOT_SIZE * 2; // Offset + length slot
-                const data_end = data_start + ((value.len + 31) / 32) * 32; // Padded to 32-byte boundary
-                if (buffer.len < data_end) return error.BufferTooSmall;
-                std.mem.writeInt(usize, ptr, data_start, .big);
-                index.* = data_start; // Move to length slot
-                try encodeByType(usize, value.len, buffer, index); // Updates index by 32
-                @memcpy(buffer[index.* .. index.* + value.len], value);
-                index.* = data_end; // Move past padded data
+            if (p.size == .slice) {
+                if (p.child == u8) {
+                    // Handle []u8
+                    const data_start = index.* + ABI_SLOT_SIZE * 2;
+                    const data_end = data_start + ((value.len + 31) / 32) * 32;
+                    if (buffer.len < data_end) return error.BufferTooSmall;
+                    const slot = ptr; // ptr is *[32]u8
+                    const bytes_needed = @sizeOf(usize);
+                    const pad_bytes = 32 - bytes_needed;
+                    @memset(slot[0..pad_bytes], 0);
+                    std.mem.writeInt(usize, slot[pad_bytes..32], data_start, .big);
+                    index.* = data_start;
+                    try encodeByType(usize, value.len, buffer, index);
+                    @memcpy(buffer[index.* .. index.* + value.len], value);
+                    index.* = data_end;
+                } else {
+                    // Handle other slice types (e.g., []u256)
+                    const data_start = index.* + ABI_SLOT_SIZE * 2;
+                    const data_end = data_start + value.len * ABI_SLOT_SIZE;
+                    if (buffer.len < data_end) return error.BufferTooSmall;
+                    std.mem.writeInt(usize, ptr, data_start, .big);
+                    index.* = data_start;
+                    try encodeByType(usize, value.len, buffer, index);
+                    for (value) |item| {
+                        try encodeByType(p.child, item, buffer, index);
+                    }
+                }
             } else {
-                @compileError("Only slice pointers to u8 supported");
+                @compileError("Unsupported pointer type");
+            }
+        },
+        .@"struct" => |struct_info| {
+            inline for (struct_info.fields) |field| {
+                const FieldType = field.type;
+                try encodeByType(FieldType, @field(value, field.name), buffer, index);
             }
         },
         else => @compileError("Unsupported type for encoding: " ++ @typeName(T)),
@@ -422,13 +477,29 @@ fn readOffset(bytes: []const u8, index: *usize) !usize {
     defer index.* = new_index;
 
     const ptr = @as(*const [32]u8, @ptrCast(bytes[index.*..new_index]));
-    return std.mem.readInt(usize, ptr, .big);
+    const bytes_needed = @sizeOf(usize);
+    const start = 32 - bytes_needed;
+    const offset = std.mem.readInt(usize, ptr[start..32], .big);
+    return offset;
 }
 
 fn readLength(bytes: []const u8, offset: usize) !usize {
     if (bytes.len < offset + 32) return error.NotEnoughBytes;
     const ptr = @as(*const [32]u8, @ptrCast(bytes[offset .. offset + 32]));
-    return std.mem.readInt(usize, ptr, .big);
+    const bytes_needed = @sizeOf(usize);
+    const start = 32 - bytes_needed;
+    return std.mem.readInt(usize, ptr[start..32], .big);
+}
+
+fn writeIntToSlot(comptime T: type, slot: []u8, value: T) void {
+    if (@typeInfo(T) != .int) {
+        @compileError("writeIntToSlot expects an integer type, got " ++ @typeName(T));
+    }
+    const bytes_needed = @divExact(@typeInfo(T).int.bits, 8);
+    const pad_bytes = 32 - bytes_needed;
+    const pad_value: u8 = if (@typeInfo(T).int.signedness == .signed and value < 0) 0xff else 0;
+    @memset(slot[0..pad_bytes], pad_value);
+    std.mem.writeInt(T, slot[pad_bytes..32], value, .big);
 }
 
 test "hashAtComptime" {
@@ -460,10 +531,6 @@ test "getSelector" {
 
     try std.testing.expectEqual(0x03df179c, incrementBySelector);
     try std.testing.expectEqual(0xa87d942c, getCountSelector);
-
-    // Print selectors in hex
-    // std.debug.print("incrementBy selector: 0x{x:0>8}\n", .{incrementBySelector});
-    // std.debug.print("getCount selector: 0x{x:0>8}\n", .{getCountSelector});
 }
 
 test "zigToSolidityType" {
@@ -472,6 +539,10 @@ test "zigToSolidityType" {
 }
 
 test "decode and encode ABI" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit(); // Clean up after the test
+    const allocator = arena.allocator();
+
     const Contract = struct {
         pub fn add(ctx: *const Context, a: u256, b: u256) u256 {
             _ = ctx;
@@ -489,6 +560,7 @@ test "decode and encode ABI" {
     // Simulate return buffer
     var return_data: [32]u8 = undefined;
     const ctx = Context{
+        .allocator = allocator,
         .block = .{ .number = 100 },
         .calldata = &calldata,
         .return_data = &return_data,
@@ -502,87 +574,113 @@ test "decode and encode ABI" {
     try std.testing.expectEqual(@as(u256, 100), result);
 }
 
-// test "decode and encode all types" {
-//     const Contract = struct {
-//         pub fn testTypes(
-//             ctx: *const Context,
-//             u: u256,
-//             i: i128,
-//             addr: u160,
-//             b: bool,
-//             fixed: [4]u8,
-//             dyn: []const u8,
-//             arr: []u256,
-//         ) struct { u256, bool, []const u8 } {
-//             return .{ u + arr[0], b, dyn };
-//         }
-//     };
+test "decode and encode all types" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
 
-//     var calldata: [320]u8 = undefined; // Already sized correctly
-//     var return_data: [256]u8 = undefined;
-//     var pos: usize = 0;
+    const Contract = struct {
+        pub fn testTypes(
+            ctx: *const Context,
+            u: u256,
+            i: i128,
+            addr: u160,
+            b: bool,
+            fixed: [4]u8,
+            dyn: []const u8,
+            arr: []const u256,
+        ) struct { u256, bool, []const u8 } {
+            _ = ctx;
+            _ = i;
+            _ = addr;
+            _ = fixed;
+            return .{ u + arr[0], b, dyn };
+        }
+    };
 
-//     // Selector
-//     calldata[pos .. pos + 4].* = [_]u8{ 0x12, 0x34, 0x56, 0x78 }; // This line caused the error
+    var calldata: [356]u8 = undefined; // Already sized correctly
+    var return_data: [256]u8 = undefined;
+    var pos: usize = 0;
 
-//     // Fix: Use direct assignment or @memcpy
-//     @memcpy(calldata[pos .. pos + 4], &[_]u8{ 0x12, 0x34, 0x56, 0x78 });
-//     pos += 4;
+    @memcpy(calldata[pos .. pos + 4], &[_]u8{ 0x12, 0x34, 0x56, 0x78 });
+    pos += 4;
 
-//     // u256 = 42
-//     std.mem.writeInt(u256, @as(*[32]u8, @ptrCast(calldata[pos .. pos + 32])), 42, .big);
-//     pos += 32;
+    // u256 = 42
+    writeIntToSlot(u256, calldata[pos .. pos + 32], 42);
+    pos += 32;
 
-//     // i128 = -100
-//     std.mem.writeInt(i128, @as(*[32]u8, @ptrCast(calldata[pos .. pos + 32])), -100, .big);
-//     pos += 32;
+    // i128 = -100
+    writeIntToSlot(i128, calldata[pos .. pos + 32], -100);
+    pos += 32;
 
-//     // address = 0x1234...
-//     std.mem.writeInt(u160, @as(*[32]u8, @ptrCast(calldata[pos .. pos + 32])), 0x1234567890abcdef1234567890abcdef12345678, .big);
-//     pos += 32;
+    // addr = 0x1234...
+    writeIntToSlot(u160, calldata[pos .. pos + 32], 0x1234567890abcdef1234567890abcdef12345678);
+    pos += 32;
 
-//     // bool = true
-//     @memset(calldata[pos .. pos + 31], 0);
-//     calldata[pos + 31] = 1;
-//     pos += 32;
+    // bool = true
+    @memset(calldata[pos .. pos + 31], 0);
+    calldata[pos + 31] = 1;
+    // std.debug.print("Set bool: calldata[{d}] = {d}\n", .{ pos + 31, calldata[pos + 31] });
+    pos += 32;
 
-//     // bytes4 = "abcd"
-//     @memset(calldata[pos .. pos + 28], 0);
-//     @memcpy(calldata[pos + 28 .. pos + 32], "abcd");
-//     pos += 32;
+    // [4]u8 = "abcd"
+    @memset(calldata[pos .. pos + 28], 0);
+    @memcpy(calldata[pos + 28 .. pos + 32], "abcd");
+    pos += 32;
 
-//     // bytes offset and data
-//     std.mem.writeInt(usize, @as(*[32]u8, @ptrCast(calldata[pos .. pos + 32])), 192, .big);
-//     pos += 32;
-//     std.mem.writeInt(usize, @as(*[32]u8, @ptrCast(calldata[192..224])), 5, .big);
-//     @memcpy(calldata[224..229], "hello");
-//     @memset(calldata[229..256], 0); // Padding
+    // Dynamic data setup
+    const arg_end = 4 + 7 * 32; // 228
+    const dyn_start = arg_end; // 228
+    const arr_start = dyn_start + 64; // 292 (32 for length + 32 for padded "hello")
 
-//     // array offset and data
-//     std.mem.writeInt(usize, @as(*[32]u8, @ptrCast(calldata[pos .. pos + 32])), 256, .big);
-//     pos += 32;
-//     std.mem.writeInt(usize, @as(*[32]u8, @ptrCast(calldata[256..288])), 1, .big);
-//     std.mem.writeInt(u256, @as(*[32]u8, @ptrCast(calldata[288..320])), 58, .big);
+    // dyn offset and data (example)
+    const slot_dyn_offset = calldata[pos .. pos + 32];
+    @memset(slot_dyn_offset[0..24], 0);
+    std.mem.writeInt(usize, @as(*[8]u8, @ptrCast(slot_dyn_offset[24..32])), dyn_start, .big);
+    pos += 32;
 
-//     const ctx = Context{
-//         .block = .{ .number = 100 },
-//         .calldata = calldata[0..320],
-//         .return_data = &return_data,
-//     };
+    // arr offset
+    const slot_arr_offset = calldata[pos .. pos + 32];
+    @memset(slot_arr_offset[0..24], 0);
+    std.mem.writeInt(usize, @as(*[8]u8, @ptrCast(slot_arr_offset[24..32])), arr_start, .big);
+    pos += 32;
 
-//     try decodeAndCallHandler(Contract.testTypes, &ctx);
+    // dyn data
+    const slot_dyn_length = calldata[dyn_start .. dyn_start + 32];
+    @memset(slot_dyn_length[0..24], 0);
+    std.mem.writeInt(usize, @as(*[8]u8, @ptrCast(slot_dyn_length[24..32])), 5, .big);
+    @memcpy(calldata[dyn_start + 32 .. dyn_start + 37], "hello");
+    @memset(calldata[dyn_start + 37 .. dyn_start + 64], 0);
 
-//     var ret_idx: usize = 0;
-//     const u_result = std.mem.readInt(u256, @as(*[32]u8, @ptrCast(return_data[0..32])), .big);
-//     ret_idx += 32;
-//     const b_result = return_data[ret_idx + 31] == 1;
-//     ret_idx += 32;
-//     const dyn_offset = std.mem.readInt(usize, @as(*[32]u8, @ptrCast(return_data[ret_idx .. ret_idx + 32])), .big);
-//     ret_idx += 32;
-//     const dyn_len = std.mem.readInt(usize, @as(*[32]u8, @ptrCast(return_data[dyn_offset .. dyn_offset + 32])), .big);
-//     const dyn_data = return_data[dyn_offset + 32 .. dyn_offset + 32 + dyn_len];
+    // arr data
+    const slot_arr_length = calldata[arr_start .. arr_start + 32];
+    @memset(slot_arr_length[0..24], 0);
+    std.mem.writeInt(usize, @as(*[8]u8, @ptrCast(slot_arr_length[24..32])), 1, .big);
+    std.mem.writeInt(u256, calldata[arr_start + 32 .. arr_start + 64], 58, .big);
 
-//     try std.testing.expectEqual(@as(u256, 100), u_result);
-//     try std.testing.expectEqual(true, b_result);
-//     try std.testing.expectEqualStrings("hello", dyn_data);
-// }
+    // Verify boolean slot
+    // std.debug.print("Before decode: calldata[131] = {d}\n", .{calldata[131]});
+
+    const ctx = Context{
+        .allocator = allocator,
+        .block = .{ .number = 100 },
+        .calldata = &calldata,
+        .return_data = &return_data,
+    };
+
+    try decodeAndCallHandler(Contract.testTypes, &ctx);
+
+    var ret_idx: usize = 0;
+    const u_result = std.mem.readInt(u256, @as(*[32]u8, @ptrCast(return_data[0..32])), .big);
+    ret_idx += 32;
+    const b_result = return_data[ret_idx + 31] == 1;
+    ret_idx += 32;
+    const dyn_offset = std.mem.readInt(usize, @as(*const [8]u8, @ptrCast(return_data[ret_idx + 24 .. ret_idx + 32])), .big);
+    ret_idx += 32;
+    const dyn_len = std.mem.readInt(usize, @as(*const [8]u8, @ptrCast(return_data[dyn_offset + 24 .. dyn_offset + 32])), .big);
+    const dyn_data = return_data[dyn_offset + 32 .. dyn_offset + 32 + dyn_len];
+
+    try std.testing.expectEqual(@as(u256, 100), u_result);
+    try std.testing.expectEqual(true, b_result);
+    try std.testing.expectEqualStrings("hello", dyn_data);
+}

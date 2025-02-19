@@ -41,8 +41,9 @@ fn foo(ctx: *const Context) void {
     }
 }
 
-fn bar(ctx: *const Context) void {
+fn bar(ctx: *const Context, n: u256) void {
     // _ = ctx;
+    _ = n;
 
     if (builtin.is_test) {
         std.debug.print("bar: blockNum: {d}\n", .{ctx.block.number});
@@ -50,10 +51,22 @@ fn bar(ctx: *const Context) void {
 }
 
 export fn user_entrypoint() u32 {
-    // var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    // defer gpa.deinit();
+    // Conditional allocator based on target architecture
+    const allocator = blk: {
+        if (builtin.target.isWasm()) {
+            // WASM target: Use WasmAllocator
+            break :blk std.heap.wasm_allocator;
+        } else {
+            // Native target (e.g., testing): Use FixedBufferAllocator
+            var buffer: [1024]u8 = undefined; // Adjust size as needed
+            var fba = std.heap.FixedBufferAllocator.init(&buffer);
+            break :blk fba.allocator();
+        }
+    };
+
     const selector = comptime getSelector("bar", bar);
     const ctx = Context{
+        .allocator = allocator,
         .block = .{
             .number = 69,
         },
