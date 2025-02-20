@@ -5,6 +5,7 @@ const address = std.meta.Int(.unsigned, 160);
 
 pub extern "vm_hooks" fn read_args(dest: *u8) void;
 pub extern "vm_hooks" fn write_result(data: *const u8, len: usize) void;
+pub extern "vm_hooks" fn pay_for_memory_grow(len: u32) void;
 
 const mem = @import("mem/arbitrum_wasm_allocator.zig");
 const arbitrum_wasm_allocator = mem.arbitrum_wasm_allocator;
@@ -260,10 +261,15 @@ pub fn decodeAndCallHandler(comptime handler: anytype, ctx: *const Context) !voi
     const result = @call(.auto, handler, args);
 
     // Encode the return value into ctx.return_data
+    // and write to write_result
     if (handler_info.return_type) |ReturnType| {
         if (ReturnType != void) {
             var index: usize = 0;
             try encodeByType(ReturnType, result, ctx.return_data, &index);
+            // NOTE: It may not be necessary to attach return_data to ctx at all
+            // design choice of whether middleware should be able to inspect
+            // probably not all that useful. Does write_result terminate execution?
+            write_result(&ctx.return_data[0], index);
         }
     }
 }
@@ -524,6 +530,7 @@ pub const Router = struct {
     }
 
     pub fn handle(comptime routes: []const Route, ctx: *const Context) !void {
+        // NOTE: Should remove this for fallback use case
         if (ctx.calldata.len < 4) return error.InvalidCalldata; // Need at least selector
         const selector = std.mem.readInt(u32, ctx.calldata[0..4], .big);
         if (builtin.is_test) {

@@ -32,12 +32,14 @@ fn foo(ctx: *const Context) void {
     }
 }
 
-fn bar(ctx: *const Context, n: u256) void {
+fn bar(ctx: *const Context, n: u256) u256 {
     _ = n;
 
     if (builtin.is_test) {
         std.debug.print("bar: blockNum: {d}\n", .{ctx.block.number});
     }
+
+    return ctx.block.number;
 }
 
 export fn user_entrypoint(len: usize) u32 {
@@ -102,10 +104,18 @@ test "user_entrypoint with bar" {
                 @as(*u8, @ptrFromInt(dest_addr)).* = @as(*const u8, @ptrFromInt(src_addr)).*;
             }
         }
+
+        pub fn deinit() void {
+            if (result_data) |data| {
+                std.testing.allocator.free(data);
+                result_data = null;
+            }
+        }
     };
 
     // Set mock calldata
     MockHooks.mock_calldata = &calldata;
+    defer MockHooks.deinit();
 
     // Override VM hooks
     @export(&MockHooks.pay_for_memory_grow, .{ .name = "pay_for_memory_grow" });
@@ -116,7 +126,9 @@ test "user_entrypoint with bar" {
     const result = user_entrypoint(calldata.len);
     try std.testing.expectEqual(@as(u32, 1), result);
 
-    // Optionally verify write_result if bar had a return value
-    // Since bar returns void, result_data should remain null
-    try std.testing.expect(MockHooks.result_data == null);
+    // Verify return data
+    const result_data = MockHooks.result_data orelse return error.NoResultData;
+    try std.testing.expectEqual(@as(usize, 32), result_data.len); // u256 is 32 bytes
+    const returned_value = std.mem.readInt(u256, result_data[0..32], .big);
+    try std.testing.expectEqual(@as(u256, 69), returned_value);
 }
