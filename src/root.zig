@@ -1,6 +1,13 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const crypto = std.crypto;
 const address = std.meta.Int(.unsigned, 160);
+
+pub extern "vm_hooks" fn read_args(dest: *u8) void;
+pub extern "vm_hooks" fn write_result(data: *const u8, len: usize) void;
+
+const mem = @import("mem/arbitrum_wasm_allocator.zig");
+const arbitrum_wasm_allocator = mem.arbitrum_wasm_allocator;
 
 // Converts a Zig type to a Solidity ABI type string
 pub fn zigToSolidityType(comptime T: type) []const u8 {
@@ -106,7 +113,61 @@ pub const Context = struct {
     },
     calldata: []const u8,
     return_data: []u8,
+
+    pub fn deinit(self: *Context) void {
+        self.allocator.free(self.calldata);
+        self.allocator.free(self.return_data);
+    }
 };
+
+pub fn createContext(calldata_len: usize) !Context {
+    // Conditional allocator based on target architecture
+    const allocator = blk: {
+        if (builtin.target.isWasm()) {
+            break :blk arbitrum_wasm_allocator;
+        } else if (builtin.is_test) {
+            break :blk std.testing.allocator; // Use dynamic allocator for tests
+        } else {
+            @compileError("Invalid target, no allocator found. (Target WASM or test builds only)");
+        }
+    };
+    if (builtin.is_test) {
+        std.debug.print("createContext: allocating calldata with len {d}\n", .{calldata_len});
+    }
+
+    // const calldata = try allocator.alloc(u8, calldata_len);
+    const calldata = allocator.alloc(u8, calldata_len) catch |err| {
+        if (builtin.is_test) {
+            std.debug.print("createContext: calldata allocation failed with error: {}\n", .{err});
+        }
+        return err;
+    };
+    if (builtin.is_test) {
+        std.debug.print("createContext: calling read_args\n", .{});
+    }
+    read_args(&calldata[0]);
+    if (builtin.is_test) {
+        std.debug.print("createContext: allocating return_data\n", .{});
+    }
+    const return_data = allocator.alloc(u8, 1024) catch |err| {
+        if (builtin.is_test) {
+            std.debug.print("createContext: return_data allocation failed with error: {}\n", .{err});
+        }
+        return err;
+    };
+    if (builtin.is_test) {
+        std.debug.print("createContext: returning context\n", .{});
+    }
+
+    // const return_data = try allocator.alloc(u8, 1024);
+
+    return Context{
+        .allocator = allocator,
+        .block = .{ .number = 69 }, // Placeholder
+        .calldata = calldata,
+        .return_data = return_data,
+    };
+}
 
 pub const NextFn = fn (*const Context) anyerror!void;
 pub const MiddlewareFn = fn (ctx: *const Context, next: *const NextFn) anyerror!void;
@@ -312,6 +373,8 @@ pub fn decodeByType(comptime T: type, ctx: *const Context, index: *usize) !T {
 }
 
 pub fn encodeByType(comptime T: type, value: T, buffer: []u8, index: *usize) !void {
+    if (T == void or T == anyerror!void) return;
+
     const new_index = index.* + ABI_SLOT_SIZE;
     if (buffer.len < new_index) return error.BufferTooSmall;
 
@@ -460,14 +523,24 @@ pub const Router = struct {
         }
     }
 
-    pub fn handle(comptime routes: []const Route, selector: u32, ctx: *const Context) !void {
+    pub fn handle(comptime routes: []const Route, ctx: *const Context) !void {
+        if (ctx.calldata.len < 4) return error.InvalidCalldata; // Need at least selector
+        const selector = std.mem.readInt(u32, ctx.calldata[0..4], .big);
+        if (builtin.is_test) {
+            std.debug.print("Received selector: 0x{x}\n", .{selector});
+        }
+
         inline for (routes) |route| {
+            if (builtin.is_test) {
+                std.debug.print("Route selector: 0x{x}\n", .{route.selector});
+            }
             if (route.selector == selector) {
                 const chain = comptime buildChain(route);
                 try chain(ctx);
                 return;
             }
         }
+        return error.NoMatchingRoute;
     }
 };
 
@@ -683,4 +756,109 @@ test "decode and encode all types" {
     try std.testing.expectEqual(@as(u256, 100), u_result);
     try std.testing.expectEqual(true, b_result);
     try std.testing.expectEqualStrings("hello", dyn_data);
+}
+
+test "router no matching route" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const Contract = struct {
+        pub fn foo(ctx: *const Context) anyerror!void {
+            _ = ctx;
+        }
+    };
+
+    var calldata = [_]u8{ 0xFF, 0xFF, 0xFF, 0xFF }; // Random selector
+
+    var ctx = Context{
+        .allocator = allocator,
+        .block = .{ .number = 69 },
+        .calldata = &calldata,
+        .return_data = &.{},
+    };
+
+    const routes = comptime [_]Route{
+        Route.init("foo", .{}, Contract.foo),
+    };
+
+    try std.testing.expectError(error.NoMatchingRoute, Router.handle(&routes, &ctx));
+}
+
+test "router middleware and bar decoding" {
+    const Contract = struct {
+        pub fn test_mw(ctx: *const Context, next: *const NextFn) anyerror!void {
+            try next(ctx);
+        }
+
+        pub fn test_mw2(ctx: *const Context, next: *const NextFn) anyerror!void {
+            try next(ctx);
+        }
+
+        pub fn test_foo(ctx: *const Context) anyerror!void {
+            _ = ctx;
+        }
+
+        pub fn test_bar(ctx: *const Context, n: u256) anyerror!void {
+            try std.testing.expectEqual(@as(u256, 42), n);
+            try std.testing.expectEqual(@as(u256, 69), ctx.block.number);
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const selector = comptime getSelector("bar", Contract.test_bar);
+    const selector_bytes = [_]u8{
+        @intCast((selector >> 24) & 0xFF),
+        @intCast((selector >> 16) & 0xFF),
+        @intCast((selector >> 8) & 0xFF),
+        @intCast(selector & 0xFF),
+    };
+    var arg_bytes = [_]u8{0} ** 32;
+    arg_bytes[31] = 42;
+    var calldata: [36]u8 = undefined;
+    @memcpy(calldata[0..4], &selector_bytes);
+    @memcpy(calldata[4..36], &arg_bytes);
+
+    var ctx = Context{
+        .allocator = allocator,
+        .block = .{ .number = 69 },
+        .calldata = &calldata,
+        .return_data = &.{},
+    };
+
+    const routes = comptime [_]Route{
+        Route.init("foo", .{}, Contract.test_foo),
+        Route.init("bar", .{ Contract.test_mw, Contract.test_mw2 }, Contract.test_bar),
+    };
+
+    try Router.handle(&routes, &ctx);
+}
+
+test "router invalid calldata" {
+    const Contract = struct {
+        pub fn foo(ctx: *const Context) void {
+            _ = ctx;
+        }
+    };
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var calldata = [_]u8{ 0x01, 0x02 }; // Too short
+
+    var ctx = Context{
+        .allocator = allocator,
+        .block = .{ .number = 69 },
+        .calldata = &calldata,
+        .return_data = &.{},
+    };
+
+    const routes = comptime [_]Route{
+        Route.init("foo", .{}, Contract.foo),
+    };
+
+    try std.testing.expectError(error.InvalidCalldata, Router.handle(&routes, &ctx));
 }

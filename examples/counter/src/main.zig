@@ -4,15 +4,9 @@ const wax = @import("wax");
 
 const Route = wax.Route;
 const Router = wax.Router;
-const hashAtComptime = wax.hashAtComptime;
-const getSelector = wax.getSelector;
 const Context = wax.Context;
 const NextFn = wax.NextFn;
-
-// struct Contract {
-//   owner: Address,
-//
-// }
+const createContext = wax.createContext;
 
 fn mw(ctx: *const Context, next: *const NextFn) anyerror!void {
     if (builtin.is_test) {
@@ -31,9 +25,6 @@ fn mw2(ctx: *const Context, next: *const NextFn) anyerror!void {
 }
 
 fn foo(ctx: *const Context) void {
-    // var owner = ctx.store.owner.get();
-    // ctx.store.owner.set(ctx.msg.sender());
-
     _ = ctx;
 
     if (builtin.is_test) {
@@ -42,7 +33,6 @@ fn foo(ctx: *const Context) void {
 }
 
 fn bar(ctx: *const Context, n: u256) void {
-    // _ = ctx;
     _ = n;
 
     if (builtin.is_test) {
@@ -50,45 +40,83 @@ fn bar(ctx: *const Context, n: u256) void {
     }
 }
 
-export fn user_entrypoint() u32 {
-    // Conditional allocator based on target architecture
-    const allocator = blk: {
-        if (builtin.target.isWasm()) {
-            // WASM target: Use WasmAllocator
-            break :blk std.heap.wasm_allocator;
-        } else {
-            // Native target (e.g., testing): Use FixedBufferAllocator
-            var buffer: [1024]u8 = undefined; // Adjust size as needed
-            var fba = std.heap.FixedBufferAllocator.init(&buffer);
-            break :blk fba.allocator();
-        }
-    };
+export fn user_entrypoint(len: usize) u32 {
+    var ctx = createContext(len) catch return 0;
+    defer ctx.deinit();
 
-    const selector = comptime getSelector("bar", bar);
-    const ctx = Context{
-        .allocator = allocator,
-        .block = .{
-            .number = 69,
-        },
-        .calldata = &.{},
-        .return_data = &.{},
-    };
-
-    // const ctx = createContext(Contract.init(), calldata);
-
-    // Define routes here
     const routes = comptime [_]Route{
         Route.init("foo", .{}, foo),
         Route.init("bar", .{ mw, mw2 }, bar),
     };
 
-    if (Router.handle(&routes, selector, &ctx)) |_| {
-        return 1; // Success
+    if (Router.handle(&routes, &ctx)) |_| {
+        return 1;
     } else |_| {
-        return 0; // General error code
+        return 0;
     }
 }
 
-test "router" {
-    _ = user_entrypoint();
+// Test setup
+test "user_entrypoint with bar" {
+    // Mock calldata: selector for "bar" + u256 argument (42)
+    const selector = comptime wax.getSelector("bar", bar);
+    const selector_bytes = [_]u8{
+        @intCast((selector >> 24) & 0xFF),
+        @intCast((selector >> 16) & 0xFF),
+        @intCast((selector >> 8) & 0xFF),
+        @intCast(selector & 0xFF),
+    };
+    var arg_bytes = [_]u8{0} ** 32;
+    arg_bytes[31] = 42;
+    var calldata: [36]u8 = undefined;
+    @memcpy(calldata[0..4], &selector_bytes);
+    @memcpy(calldata[4..36], &arg_bytes);
+
+    // Mock hooks
+    const MockHooks = struct {
+        var mock_calldata: []const u8 = &.{};
+        var result_data: ?[]u8 = null;
+
+        pub fn pay_for_memory_grow(_: u32) callconv(.C) void {}
+
+        pub fn read_args(dest: *u8) callconv(.C) void {
+            const dest_ptr = @intFromPtr(dest);
+            const src_ptr = @intFromPtr(mock_calldata.ptr);
+            for (0..mock_calldata.len) |i| {
+                const dest_addr = dest_ptr + i;
+                const src_addr = src_ptr + i;
+                @as(*u8, @ptrFromInt(dest_addr)).* = @as(*const u8, @ptrFromInt(src_addr)).*;
+            }
+        }
+
+        pub fn write_result(data: *const u8, len: usize) callconv(.C) void {
+            const allocator = std.testing.allocator;
+            if (result_data) |old_data| allocator.free(old_data);
+            result_data = allocator.alloc(u8, len) catch return;
+            // Unsafe manual copy with pointer arithmetic
+            const dest_ptr = @intFromPtr(result_data.?.ptr);
+            const src_ptr = @intFromPtr(data);
+            for (0..len) |i| {
+                const dest_addr = dest_ptr + i;
+                const src_addr = src_ptr + i;
+                @as(*u8, @ptrFromInt(dest_addr)).* = @as(*const u8, @ptrFromInt(src_addr)).*;
+            }
+        }
+    };
+
+    // Set mock calldata
+    MockHooks.mock_calldata = &calldata;
+
+    // Override VM hooks
+    @export(&MockHooks.pay_for_memory_grow, .{ .name = "pay_for_memory_grow" });
+    @export(&MockHooks.read_args, .{ .name = "read_args" });
+    @export(&MockHooks.write_result, .{ .name = "write_result" });
+
+    // Run the entrypoint
+    const result = user_entrypoint(calldata.len);
+    try std.testing.expectEqual(@as(u32, 1), result);
+
+    // Optionally verify write_result if bar had a return value
+    // Since bar returns void, result_data should remain null
+    try std.testing.expect(MockHooks.result_data == null);
 }
