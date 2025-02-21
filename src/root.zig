@@ -1,40 +1,51 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const crypto = std.crypto;
-const address = std.meta.Int(.unsigned, 160);
+const context = @import("context.zig");
+const host = @import("hostio.zig");
 
-pub extern "vm_hooks" fn read_args(dest: *u8) void;
-pub extern "vm_hooks" fn write_result(data: *const u8, len: usize) void;
-pub extern "vm_hooks" fn pay_for_memory_grow(len: u32) void;
+pub const Context = context.Context;
+pub const createContext = context.createContext;
 
-const ArbWasmAllocator = @import("mem/arb_wasm_allocator.zig");
-const arbitrum_wasm_allocator = std.mem.Allocator{
-    .ptr = undefined,
-    .vtable = &ArbWasmAllocator.vtable,
-};
+pub const Address = std.meta.Int(.unsigned, 160);
+
+pub fn addressFromBytes(data: []const u8) !Address {
+    if (data.len < 20) return error.InvalidAddressLength;
+    var bytes: [32]u8 = undefined;
+    @memset(bytes[0..12], 0);
+    @memcpy(bytes[12..32], data[0..20]);
+    return @truncate(std.mem.readInt(u256, &bytes, .big));
+}
+
+pub fn addressToBytes(addr: Address) [20]u8 {
+    var bytes: [32]u8 = undefined;
+    std.mem.writeInt(u256, &bytes, addr, .big);
+    var result: [20]u8 = undefined;
+    @memcpy(&result, bytes[12..32]);
+    return result;
+}
 
 // Converts a Zig type to a Solidity ABI type string
 pub fn zigToSolidityType(comptime T: type) []const u8 {
+    // special case for address to avoid u160 ambiguity
+    if (T == Address) return "address";
     return switch (@typeInfo(T)) {
-        .int => |info| switch (info.signedness) {
-            .signed => switch (info.bits) {
-                8 => "int8",
-                16 => "int16",
-                32 => "int32",
-                64 => "int64",
-                128 => "int128",
-                256 => "int256",
-                else => @compileError("Unsupported integer type"),
-            },
-            .unsigned => switch (info.bits) {
-                8 => "uint8",
-                16 => "uint16",
-                32 => "uint32",
-                64 => "uint64",
-                128 => "uint128",
-                256 => "uint256",
-                else => @compileError("Unsupported unsigned integer type"),
-            },
+        .int => |info| blk: {
+            if (info.signedness == .signed) {
+                switch (info.bits) {
+                    else => if (info.bits % 8 == 0 and info.bits <= 256)
+                        break :blk "int" ++ std.fmt.comptimePrint("{}", .{info.bits})
+                    else
+                        @compileError("Unsupported signed integer size"),
+                }
+            } else {
+                switch (info.bits) {
+                    else => if (info.bits % 8 == 0 and info.bits <= 256)
+                        break :blk "uint" ++ std.fmt.comptimePrint("{}", .{info.bits})
+                    else
+                        @compileError("Unsupported unsigned integer size"),
+                }
+            }
         },
         .bool => "bool",
         .array => |arr| if (arr.child == u8 and arr.len > 0)
@@ -106,71 +117,6 @@ pub fn hashAtComptime(comptime data: []const u8) [32]u8 {
         std.crypto.hash.sha3.Keccak256.hash(data, &hash, .{});
         return hash;
     }
-}
-
-// Context struct contains vm data like block number, timestamp, etc
-// Plus access to storage via Context.store
-pub const Context = struct {
-    allocator: std.mem.Allocator,
-    block: struct {
-        number: u256,
-    },
-    calldata: []const u8,
-    return_data: []u8,
-
-    pub fn deinit(self: *Context) void {
-        self.allocator.free(self.calldata);
-        self.allocator.free(self.return_data);
-    }
-};
-
-pub fn createContext(calldata_len: usize) !Context {
-    // Conditional allocator based on target architecture
-    const allocator = blk: {
-        if (builtin.target.isWasm()) {
-            break :blk arbitrum_wasm_allocator;
-        } else if (builtin.is_test) {
-            break :blk std.testing.allocator; // Use dynamic allocator for tests
-        } else {
-            @compileError("Invalid target, no allocator found. (Target WASM or test builds only)");
-        }
-    };
-    if (builtin.is_test) {
-        std.debug.print("createContext: allocating calldata with len {d}\n", .{calldata_len});
-    }
-
-    // const calldata = try allocator.alloc(u8, calldata_len);
-    const calldata = allocator.alloc(u8, calldata_len) catch |err| {
-        if (builtin.is_test) {
-            std.debug.print("createContext: calldata allocation failed with error: {}\n", .{err});
-        }
-        return err;
-    };
-    if (builtin.is_test) {
-        std.debug.print("createContext: calling read_args\n", .{});
-    }
-    read_args(&calldata[0]);
-    if (builtin.is_test) {
-        std.debug.print("createContext: allocating return_data\n", .{});
-    }
-    const return_data = allocator.alloc(u8, 1024) catch |err| {
-        if (builtin.is_test) {
-            std.debug.print("createContext: return_data allocation failed with error: {}\n", .{err});
-        }
-        return err;
-    };
-    if (builtin.is_test) {
-        std.debug.print("createContext: returning context\n", .{});
-    }
-
-    // const return_data = try allocator.alloc(u8, 1024);
-
-    return Context{
-        .allocator = allocator,
-        .block = .{ .number = 69 }, // Placeholder
-        .calldata = calldata,
-        .return_data = return_data,
-    };
 }
 
 pub const NextFn = fn (*const Context) anyerror!void;
@@ -273,10 +219,10 @@ pub fn decodeAndCallHandler(comptime handler: anytype, ctx: *const Context) !voi
             // NOTE: It may not be necessary to attach return_data to ctx at all
             // design choice of whether middleware should be able to inspect
             // probably not all that useful. Does write_result terminate execution?
-            write_result(&ctx.return_data[0], index);
+            host.write_result(&ctx.return_data[0], index);
         } else {
             const min_data = [_]u8{0}; // Minimal output
-            write_result(&min_data[0], 1);
+            host.write_result(&min_data[0], 1);
         }
     }
 }
