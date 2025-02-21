@@ -4,26 +4,12 @@ const crypto = std.crypto;
 const context = @import("context.zig");
 const host = @import("hostio.zig");
 
+// Context
 pub const Context = context.Context;
-pub const createContext = context.createContext;
 
-pub const Address = std.meta.Int(.unsigned, 160);
-
-pub fn addressFromBytes(data: []const u8) !Address {
-    if (data.len < 20) return error.InvalidAddressLength;
-    var bytes: [32]u8 = undefined;
-    @memset(bytes[0..12], 0);
-    @memcpy(bytes[12..32], data[0..20]);
-    return @truncate(std.mem.readInt(u256, &bytes, .big));
-}
-
-pub fn addressToBytes(addr: Address) [20]u8 {
-    var bytes: [32]u8 = undefined;
-    std.mem.writeInt(u256, &bytes, addr, .big);
-    var result: [20]u8 = undefined;
-    @memcpy(&result, bytes[12..32]);
-    return result;
-}
+// Types
+pub const types = @import("types.zig");
+pub const Address = types.Address;
 
 // Converts a Zig type to a Solidity ABI type string
 pub fn zigToSolidityType(comptime T: type) []const u8 {
@@ -214,14 +200,16 @@ pub fn decodeAndCallHandler(comptime handler: anytype, ctx: *const Context) !voi
     // TODO: handle !void or anyerror!void case
     if (handler_info.return_type) |ReturnType| {
         if (ReturnType != void) {
-            var index: usize = 0;
-            try encodeByType(ReturnType, result, ctx.return_data, &index);
-            // NOTE: It may not be necessary to attach return_data to ctx at all
-            // design choice of whether middleware should be able to inspect
-            // probably not all that useful. Does write_result terminate execution?
-            host.write_result(&ctx.return_data[0], index);
+            var buffer = std.ArrayList(u8).init(ctx.allocator);
+            defer buffer.deinit();
+
+            // Encode into ArrayList
+            try encodeByType(ReturnType, result, &buffer);
+
+            // Write encoded data to the host
+            host.write_result(&buffer.items[0], buffer.items.len);
         } else {
-            const min_data = [_]u8{0}; // Minimal output
+            const min_data = [_]u8{0};
             host.write_result(&min_data[0], 1);
         }
     }
@@ -331,19 +319,15 @@ pub fn decodeByType(comptime T: type, ctx: *const Context, index: *usize) !T {
     };
 }
 
-pub fn encodeByType(comptime T: type, value: T, buffer: []u8, index: *usize) !void {
+pub fn encodeByType(comptime T: type, value: T, buffer: *std.ArrayList(u8)) !void {
     if (T == void or T == anyerror!void) return;
-
-    const new_index = index.* + ABI_SLOT_SIZE;
-    if (buffer.len < new_index) return error.BufferTooSmall;
-
-    // Convert slice to a pointer to a fixed-size array
-    const slice = buffer[index.*..new_index];
-    const ptr = @as(*[32]u8, @ptrCast(slice));
 
     switch (@typeInfo(T)) {
         .int => |info| {
-            defer index.* = new_index; // single 32-byte slot
+            // Ensure buffer has space for 32 bytes
+            try buffer.appendNTimes(0, ABI_SLOT_SIZE); // Reserve space
+            const slice = buffer.items[buffer.items.len - ABI_SLOT_SIZE ..][0..32];
+            const ptr = @as(*[32]u8, @ptrCast(slice.ptr));
             if (info.signedness == .signed) {
                 const extended = switch (info.bits) {
                     else => if (info.bits % 8 == 0 and info.bits <= 256)
@@ -363,67 +347,60 @@ pub fn encodeByType(comptime T: type, value: T, buffer: []u8, index: *usize) !vo
             }
         },
         .bool => {
-            defer index.* = new_index;
-            @memset(ptr[0..31], 0); // Left-pad with zeros
-            std.mem.writeInt(u8, ptr[31..32], @intFromBool(value), .big);
+            // 32-byte slot, right-aligned
+            try buffer.appendNTimes(0, 31);
+            try buffer.append(@intFromBool(value));
         },
         .array => |arr| {
-            if (arr.child == u8 and arr.len == 0) { // Dynamic bytes
-                const data_start = index.* + ABI_SLOT_SIZE * 2; // Offset + length slot
-                const data_end = data_start + ((value.len + 31) / 32) * 32; // Padded to 32-byte boundary
-                if (buffer.len < data_end) return error.BufferTooSmall;
-                std.mem.writeInt(usize, ptr, data_start, .big);
-                index.* = data_start; // Move to length slot
-                try encodeByType(usize, value.len, buffer, index); // Updates index by 32
-                @memcpy(buffer[index.* .. index.* + value.len], value);
-                index.* = data_end; // Move past padded data
-            } else if (arr.len > 0 and arr.child == u8) { // Fixed bytes
-                defer index.* = new_index; // Single 32-byte slot
-                @memset(ptr[0..(32 - arr.len)], 0);
-                @memcpy(ptr[(32 - arr.len)..32], &value);
-            } else if (arr.len > 0) { // Fixed array
-                index.* = new_index; // Move past head
+            if (arr.len == 0 and arr.child == u8) { // Dynamic bytes
+                // Offset (32 bytes) + length (32 bytes) + padded data
+                const data_start = buffer.items.len + 64; // Offset + length slots
+                try buffer.appendNTimes(0, 24); // Pad offset to 32 bytes
+                try buffer.appendSlice(std.mem.asBytes(&data_start)[0..8]); // Offset value
+                try buffer.appendNTimes(0, 24); // Pad length to 32 bytes
+                try buffer.appendSlice(std.mem.asBytes(&value.len)[0..8]); // Length value
+                try buffer.appendSlice(value); // Data
+                const padded_len = (value.len + 31) & ~@as(usize, 31); // Round up to 32-byte boundary
+                try buffer.appendNTimes(0, padded_len - value.len); // Padding
+            } else if (arr.len > 0 and arr.child == u8) { // Fixed bytes (e.g., bytes4)
+                try buffer.appendNTimes(0, 32 - arr.len); // Left-pad to 32 bytes
+                try buffer.appendSlice(&value);
+            } else if (arr.len > 0) { // Fixed array (e.g., uint256[3])
                 for (value) |item| {
-                    try encodeByType(arr.child, item, buffer, index); // Recursive call updates index
+                    try encodeByType(arr.child, item, buffer);
                 }
-            } else { // Dynamic array
-                const data_start = index.* + ABI_SLOT_SIZE * 2; // Offset + length slot
-                const data_end = data_start + value.len * ABI_SLOT_SIZE;
-                if (buffer.len < data_end) return error.BufferTooSmall;
-                std.mem.writeInt(usize, ptr, data_start, .big);
-                index.* = data_start; // Move to length slot
-                try encodeByType(usize, value.len, buffer, index); // Updates index by 32
+            } else { // Dynamic array (e.g., uint256[])
+                // Offset (32 bytes) + length (32 bytes) + elements
+                const data_start = buffer.items.len + 64; // Offset + length slots
+                try buffer.appendNTimes(0, 24); // Pad offset
+                try buffer.appendSlice(std.mem.asBytes(&data_start)[0..8]);
+                try buffer.appendNTimes(0, 24); // Pad length
+                try buffer.appendSlice(std.mem.asBytes(&value.len)[0..8]);
                 for (value) |item| {
-                    try encodeByType(arr.child, item, buffer, index); // Updates index per element
+                    try encodeByType(arr.child, item, buffer);
                 }
             }
         },
         .pointer => |p| {
-            if (p.size == .slice) {
-                if (p.child == u8) {
-                    // Handle []u8
-                    const data_start = index.* + ABI_SLOT_SIZE * 2;
-                    const data_end = data_start + ((value.len + 31) / 32) * 32;
-                    if (buffer.len < data_end) return error.BufferTooSmall;
-                    const slot = ptr; // ptr is *[32]u8
-                    const bytes_needed = @sizeOf(usize);
-                    const pad_bytes = 32 - bytes_needed;
-                    @memset(slot[0..pad_bytes], 0);
-                    std.mem.writeInt(usize, slot[pad_bytes..32], data_start, .big);
-                    index.* = data_start;
-                    try encodeByType(usize, value.len, buffer, index);
-                    @memcpy(buffer[index.* .. index.* + value.len], value);
-                    index.* = data_end;
-                } else {
-                    // Handle other slice types (e.g., []u256)
-                    const data_start = index.* + ABI_SLOT_SIZE * 2;
-                    const data_end = data_start + value.len * ABI_SLOT_SIZE;
-                    if (buffer.len < data_end) return error.BufferTooSmall;
-                    std.mem.writeInt(usize, ptr, data_start, .big);
-                    index.* = data_start;
-                    try encodeByType(usize, value.len, buffer, index);
+            if (p.size == .Slice) {
+                if (p.child == u8) { // Dynamic bytes (e.g., string)
+                    // Offset (32 bytes) + length (32 bytes) + padded data
+                    const data_start = buffer.items.len + 64;
+                    try buffer.appendNTimes(0, 24); // Pad offset
+                    try buffer.appendSlice(std.mem.asBytes(&data_start)[0..8]);
+                    try buffer.appendNTimes(0, 24); // Pad length
+                    try buffer.appendSlice(std.mem.asBytes(&value.len)[0..8]);
+                    try buffer.appendSlice(value);
+                    const padded_len = (value.len + 31) & ~@as(usize, 31);
+                    try buffer.appendNTimes(0, padded_len - value.len);
+                } else { // Dynamic array (e.g., uint256[])
+                    const data_start = buffer.items.len + 64;
+                    try buffer.appendNTimes(0, 24); // Pad offset
+                    try buffer.appendSlice(std.mem.asBytes(&data_start)[0..8]);
+                    try buffer.appendNTimes(0, 24); // Pad length
+                    try buffer.appendSlice(std.mem.asBytes(&value.len)[0..8]);
                     for (value) |item| {
-                        try encodeByType(p.child, item, buffer, index);
+                        try encodeByType(p.child, item, buffer);
                     }
                 }
             } else {
@@ -432,8 +409,7 @@ pub fn encodeByType(comptime T: type, value: T, buffer: []u8, index: *usize) !vo
         },
         .@"struct" => |struct_info| {
             inline for (struct_info.fields) |field| {
-                const FieldType = field.type;
-                try encodeByType(FieldType, @field(value, field.name), buffer, index);
+                try encodeByType(field.type, @field(value, field.name), buffer);
             }
         },
         else => @compileError("Unsupported type for encoding: " ++ @typeName(T)),

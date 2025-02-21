@@ -6,7 +6,6 @@ const Route = wax.Route;
 const Router = wax.Router;
 const Context = wax.Context;
 const NextFn = wax.NextFn;
-const createContext = wax.createContext;
 
 fn mw(ctx: *const Context, next: *const NextFn) anyerror!void {
     if (builtin.is_test) {
@@ -43,7 +42,7 @@ fn bar(ctx: *const Context, n: u256) u256 {
 }
 
 export fn user_entrypoint(len: usize) i32 {
-    var ctx = createContext(len) catch return 1;
+    var ctx = Context.init(len) catch return 1;
     defer ctx.deinit();
 
     const routes = comptime [_]Route{
