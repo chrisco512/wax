@@ -42,8 +42,8 @@ fn bar(ctx: *const Context, n: u256) u256 {
     return ctx.block.number;
 }
 
-export fn user_entrypoint(len: usize) u32 {
-    var ctx = createContext(len) catch return 0;
+export fn user_entrypoint(len: usize) i32 {
+    var ctx = createContext(len) catch return 1;
     defer ctx.deinit();
 
     const routes = comptime [_]Route{
@@ -52,9 +52,9 @@ export fn user_entrypoint(len: usize) u32 {
     };
 
     if (Router.handle(&routes, &ctx)) |_| {
-        return 1;
-    } else |_| {
         return 0;
+    } else |_| {
+        return 1;
     }
 }
 
@@ -124,7 +124,7 @@ test "user_entrypoint with bar" {
 
     // Run the entrypoint
     const result = user_entrypoint(calldata.len);
-    try std.testing.expectEqual(@as(u32, 1), result);
+    try std.testing.expectEqual(@as(i32, 0), result);
 
     // Verify return data
     const result_data = MockHooks.result_data orelse return error.NoResultData;

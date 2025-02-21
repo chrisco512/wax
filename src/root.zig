@@ -7,8 +7,11 @@ pub extern "vm_hooks" fn read_args(dest: *u8) void;
 pub extern "vm_hooks" fn write_result(data: *const u8, len: usize) void;
 pub extern "vm_hooks" fn pay_for_memory_grow(len: u32) void;
 
-const mem = @import("mem/arbitrum_wasm_allocator.zig");
-const arbitrum_wasm_allocator = mem.arbitrum_wasm_allocator;
+const ArbWasmAllocator = @import("mem/arb_wasm_allocator.zig");
+const arbitrum_wasm_allocator = std.mem.Allocator{
+    .ptr = undefined,
+    .vtable = &ArbWasmAllocator.vtable,
+};
 
 // Converts a Zig type to a Solidity ABI type string
 pub fn zigToSolidityType(comptime T: type) []const u8 {
@@ -262,6 +265,7 @@ pub fn decodeAndCallHandler(comptime handler: anytype, ctx: *const Context) !voi
 
     // Encode the return value into ctx.return_data
     // and write to write_result
+    // TODO: handle !void or anyerror!void case
     if (handler_info.return_type) |ReturnType| {
         if (ReturnType != void) {
             var index: usize = 0;
@@ -270,6 +274,9 @@ pub fn decodeAndCallHandler(comptime handler: anytype, ctx: *const Context) !voi
             // design choice of whether middleware should be able to inspect
             // probably not all that useful. Does write_result terminate execution?
             write_result(&ctx.return_data[0], index);
+        } else {
+            const min_data = [_]u8{0}; // Minimal output
+            write_result(&min_data[0], 1);
         }
     }
 }
