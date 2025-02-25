@@ -52,8 +52,8 @@ pub fn getSelector(comptime name: []const u8, comptime func: anytype) u32 {
     comptime {
         const func_info = @typeInfo(@TypeOf(func)).@"fn";
 
-        if (func_info.params.len == 0 or func_info.params[0].type.? != *const Context) {
-            @compileError("First parameter of func must be *const Context type");
+        if (func_info.params.len == 0 or func_info.params[0].type.? != *Context) {
+            @compileError("First parameter of func must be *Context type");
         }
 
         // Append function name
@@ -78,6 +78,63 @@ pub fn getSelector(comptime name: []const u8, comptime func: anytype) u32 {
             @as(u32, hash[3]);
     }
 }
+
+fn getErrorSelector(comptime signature: []const u8) u32 {
+    // Compute Keccak-256 hash at compile time
+    const hash = comptime hashAtComptime(signature);
+    // Extract first 4 bytes for selector
+    return (@as(u32, hash[0]) << 24) |
+        (@as(u32, hash[1]) << 16) |
+        (@as(u32, hash[2]) << 8) |
+        @as(u32, hash[3]);
+}
+
+fn getErrorSignature(comptime ErrorType: type) []const u8 {
+    const struct_name = @typeName(ErrorType);
+    const fields = @typeInfo(ErrorType).@"struct".fields;
+    var sig: []const u8 = struct_name ++ "(";
+    inline for (fields, 0..) |field, i| {
+        if (i > 0) sig = sig ++ ",";
+        sig = sig ++ zigToSolidityType(field.type);
+    }
+    sig = sig ++ ")";
+    return sig;
+}
+
+pub fn encodeCustomError(comptime ErrorType: type, err: ErrorType, allocator: std.mem.Allocator) ![]u8 {
+    // Get the signature from the error type
+    const signature = comptime getErrorSignature(ErrorType);
+    // Compute the selector at compile time
+    const selector = comptime getErrorSelector(signature);
+
+    // Initialize buffer for encoded data
+    var buffer = std.ArrayList(u8).init(allocator);
+    defer buffer.deinit();
+
+    // Append the 4-byte selector
+    try buffer.appendSlice(&[_]u8{
+        @intCast((selector >> 24) & 0xFF),
+        @intCast((selector >> 16) & 0xFF),
+        @intCast((selector >> 8) & 0xFF),
+        @intCast(selector & 0xFF),
+    });
+
+    // Get the struct fields using reflection
+    const fields = @typeInfo(ErrorType).@"struct".fields;
+
+    // Encode each field according to its type
+    inline for (fields) |field| {
+        const value = @field(err, field.name);
+        try encodeByType(field.type, value, &buffer);
+    }
+
+    // Return the encoded data
+    return buffer.toOwnedSlice();
+}
+
+pub const WaxError = error{
+    Revert,
+};
 
 // Converts a byte array at comptime to a hex-encoded string
 pub fn bytesToHexString(comptime T: type, comptime bytes: []const u8) T {
@@ -105,8 +162,8 @@ pub fn hashAtComptime(comptime data: []const u8) [32]u8 {
     }
 }
 
-pub const NextFn = fn (*const Context) anyerror!void;
-pub const MiddlewareFn = fn (ctx: *const Context, next: *const NextFn) anyerror!void;
+pub const NextFn = fn (*Context) anyerror!void;
+pub const MiddlewareFn = fn (ctx: *Context, next: *const NextFn) anyerror!void;
 
 // Routes define public methods for the smart contract
 // Any number of middleware functions can be chained before the
@@ -162,7 +219,7 @@ pub fn getParamsType(comptime handler: anytype) type {
 }
 
 // This function expects a handler fn, Context
-pub fn decodeHandlerArgs(comptime handler: anytype, ctx: *const Context) !getParamsType(handler) {
+pub fn decodeHandlerArgs(comptime handler: anytype, ctx: *Context) !getParamsType(handler) {
     if (@typeInfo(@TypeOf(handler)) != .@"fn") {
         @compileError("Expected a function, but got " ++ @typeName(@TypeOf(handler)));
     }
@@ -177,40 +234,44 @@ pub fn decodeHandlerArgs(comptime handler: anytype, ctx: *const Context) !getPar
 
     // Decode each argument from calldata, skipping context param
     inline for (handler_info.params[1..], 0..) |param, i| {
-        // std.debug.print("Decoding param {d} at byte_index {d}\n", .{ i, byte_index });
         args[i + 1] = try decodeByType(param.type.?, ctx, &byte_index);
     }
 
     return args;
 }
 
-pub fn decodeAndCallHandler(comptime handler: anytype, ctx: *const Context) !void {
+pub fn decodeAndCallHandler(comptime handler: anytype, ctx: *Context) !void {
     if (@typeInfo(@TypeOf(handler)) != .@"fn") {
         @compileError("Expected a function, but got " ++ @typeName(@TypeOf(handler)));
     }
 
-    const handler_info = @typeInfo(@TypeOf(handler)).@"fn";
+    const handler_type_info = @typeInfo(@TypeOf(handler)).@"fn";
     const args = try decodeHandlerArgs(handler, ctx);
 
     // Call the handler and capture the return value
     const result = @call(.auto, handler, args);
 
-    // Encode the return value into ctx.return_data
+    // Encode the return value into ctx.returndata
     // and write to write_result
-    // TODO: handle !void or anyerror!void case
-    if (handler_info.return_type) |ReturnType| {
+    if (handler_type_info.return_type) |ReturnType| {
         if (ReturnType != void) {
             var buffer = std.ArrayList(u8).init(ctx.allocator);
             defer buffer.deinit();
 
-            // Encode into ArrayList
-            try encodeByType(ReturnType, result, &buffer);
+            // Strips out error set from return type if necessary
+            switch (@typeInfo(ReturnType)) {
+                .error_union => |eu| {
+                    const payload_result = try result;
+                    try encodeByType(eu.payload, payload_result, &buffer);
+                },
+                else => try encodeByType(ReturnType, result, &buffer),
+            }
 
-            // Write encoded data to the host
-            host.write_result(&buffer.items[0], buffer.items.len);
+            ctx.returndata = try buffer.toOwnedSlice();
         } else {
-            const min_data = [_]u8{0};
-            host.write_result(&min_data[0], 1);
+            const empty_array: [0]u8 = .{};
+            const empty_slice: []u8 = &empty_array;
+            ctx.returndata = empty_slice;
         }
     }
 }
@@ -382,7 +443,7 @@ pub fn encodeByType(comptime T: type, value: T, buffer: *std.ArrayList(u8)) !voi
             }
         },
         .pointer => |p| {
-            if (p.size == .Slice) {
+            if (p.size == .slice) {
                 if (p.child == u8) { // Dynamic bytes (e.g., string)
                     // Offset (32 bytes) + length (32 bytes) + padded data
                     const data_start = buffer.items.len + 64;
@@ -426,7 +487,7 @@ pub fn returnDecodingFunction(comptime handler: anytype) NextFn {
     }
 
     return struct {
-        pub fn call(ctx: *const Context) anyerror!void {
+        pub fn call(ctx: *Context) anyerror!void {
             try decodeAndCallHandler(handler, ctx);
         }
     }.call;
@@ -447,7 +508,7 @@ pub const Router = struct {
                 const middleware = r.middleware[i - 1];
                 const next_middleware = next;
                 const wrapper = struct {
-                    fn wrapped(ctx: *const Context) anyerror!void {
+                    fn wrapped(ctx: *Context) anyerror!void {
                         try middleware(ctx, next_middleware);
                     }
                 }.wrapped;
@@ -458,25 +519,37 @@ pub const Router = struct {
         }
     }
 
-    pub fn handle(comptime routes: []const Route, ctx: *const Context) !void {
-        // NOTE: Should remove this for fallback use case
-        if (ctx.calldata.len < 4) return error.InvalidCalldata; // Need at least selector
+    pub fn handle(comptime routes: []const Route, ctx: *Context) i32 {
+        // NOTE: Change this for fallback use case
+        if (ctx.calldata.len < 4) {
+            return 1;
+        }
+
         const selector = std.mem.readInt(u32, ctx.calldata[0..4], .big);
+
         if (builtin.is_test) {
             std.debug.print("Received selector: 0x{x}\n", .{selector});
         }
 
         inline for (routes) |route| {
-            if (builtin.is_test) {
-                std.debug.print("Route selector: 0x{x}\n", .{route.selector});
-            }
             if (route.selector == selector) {
                 const chain = comptime buildChain(route);
-                try chain(ctx);
-                return;
+
+                if (chain(ctx)) |_| {
+                    if (ctx.returndata) |data| {
+                        host.write_result(&data.ptr[0], data.len);
+                    }
+                    return 0;
+                } else |_| {
+                    if (ctx.revertdata) |data| {
+                        host.write_result(&data.ptr[0], data.len);
+                    }
+                    return 1;
+                }
             }
         }
-        return error.NoMatchingRoute;
+
+        return 1;
     }
 };
 
@@ -523,12 +596,12 @@ test "hashAtComptime" {
 
 test "getSelector" {
     const Contract = struct {
-        pub fn incrementBy(ctx: *const Context, amount: u256) void {
+        pub fn incrementBy(ctx: *Context, amount: u256) void {
             _ = ctx;
             _ = amount;
         }
 
-        pub fn getCount(ctx: *const Context) u256 {
+        pub fn getCount(ctx: *Context) u256 {
             _ = ctx;
             return 0;
         }
@@ -553,7 +626,7 @@ test "decode and encode ABI" {
     const allocator = arena.allocator();
 
     const Contract = struct {
-        pub fn add(ctx: *const Context, a: u256, b: u256) u256 {
+        pub fn add(ctx: *Context, a: u256, b: u256) u256 {
             _ = ctx;
             return a + b;
         }
@@ -567,19 +640,19 @@ test "decode and encode ABI" {
     std.mem.writeInt(u256, calldata[36..68], 58, .big);
 
     // Simulate return buffer
-    var return_data: [32]u8 = undefined;
-    const ctx = Context{
+    var returndata: [32]u8 = undefined;
+    var ctx = Context{
         .allocator = allocator,
         .block = .{ .number = 100 },
         .calldata = &calldata,
-        .return_data = &return_data,
+        .returndata = &returndata,
     };
 
     // Call the handler
     try decodeAndCallHandler(Contract.add, &ctx);
 
     // Verify the result (42 + 58 = 100)
-    const result = std.mem.readInt(u256, return_data[0..32], .big);
+    const result = std.mem.readInt(u256, returndata[0..32], .big);
     try std.testing.expectEqual(@as(u256, 100), result);
 }
 
@@ -590,7 +663,7 @@ test "decode and encode all types" {
 
     const Contract = struct {
         pub fn testTypes(
-            ctx: *const Context,
+            ctx: *Context,
             u: u256,
             i: i128,
             addr: u160,
@@ -608,7 +681,7 @@ test "decode and encode all types" {
     };
 
     var calldata: [356]u8 = undefined; // Already sized correctly
-    var return_data: [256]u8 = undefined;
+    var returndata: [256]u8 = undefined;
     var pos: usize = 0;
 
     @memcpy(calldata[pos .. pos + 4], &[_]u8{ 0x12, 0x34, 0x56, 0x78 });
@@ -670,24 +743,24 @@ test "decode and encode all types" {
     // Verify boolean slot
     // std.debug.print("Before decode: calldata[131] = {d}\n", .{calldata[131]});
 
-    const ctx = Context{
+    var ctx = Context{
         .allocator = allocator,
         .block = .{ .number = 100 },
         .calldata = &calldata,
-        .return_data = &return_data,
+        .returndata = &returndata,
     };
 
     try decodeAndCallHandler(Contract.testTypes, &ctx);
 
     var ret_idx: usize = 0;
-    const u_result = std.mem.readInt(u256, @as(*[32]u8, @ptrCast(return_data[0..32])), .big);
+    const u_result = std.mem.readInt(u256, @as(*[32]u8, @ptrCast(returndata[0..32])), .big);
     ret_idx += 32;
-    const b_result = return_data[ret_idx + 31] == 1;
+    const b_result = returndata[ret_idx + 31] == 1;
     ret_idx += 32;
-    const dyn_offset = std.mem.readInt(usize, @as(*const [8]u8, @ptrCast(return_data[ret_idx + 24 .. ret_idx + 32])), .big);
+    const dyn_offset = std.mem.readInt(usize, @as(*const [8]u8, @ptrCast(returndata[ret_idx + 24 .. ret_idx + 32])), .big);
     ret_idx += 32;
-    const dyn_len = std.mem.readInt(usize, @as(*const [8]u8, @ptrCast(return_data[dyn_offset + 24 .. dyn_offset + 32])), .big);
-    const dyn_data = return_data[dyn_offset + 32 .. dyn_offset + 32 + dyn_len];
+    const dyn_len = std.mem.readInt(usize, @as(*const [8]u8, @ptrCast(returndata[dyn_offset + 24 .. dyn_offset + 32])), .big);
+    const dyn_data = returndata[dyn_offset + 32 .. dyn_offset + 32 + dyn_len];
 
     try std.testing.expectEqual(@as(u256, 100), u_result);
     try std.testing.expectEqual(true, b_result);
@@ -700,7 +773,7 @@ test "router no matching route" {
     const allocator = arena.allocator();
 
     const Contract = struct {
-        pub fn foo(ctx: *const Context) anyerror!void {
+        pub fn foo(ctx: *Context) anyerror!void {
             _ = ctx;
         }
     };
@@ -711,31 +784,32 @@ test "router no matching route" {
         .allocator = allocator,
         .block = .{ .number = 69 },
         .calldata = &calldata,
-        .return_data = &.{},
+        .returndata = &.{},
     };
 
     const routes = comptime [_]Route{
         Route.init("foo", .{}, Contract.foo),
     };
 
-    try std.testing.expectError(error.NoMatchingRoute, Router.handle(&routes, &ctx));
+    const result = Router.handle(&routes, &ctx);
+    try std.testing.expectEqual(@as(i32, 1), result);
 }
 
 test "router middleware and bar decoding" {
     const Contract = struct {
-        pub fn test_mw(ctx: *const Context, next: *const NextFn) anyerror!void {
+        pub fn test_mw(ctx: *Context, next: *const NextFn) anyerror!void {
             try next(ctx);
         }
 
-        pub fn test_mw2(ctx: *const Context, next: *const NextFn) anyerror!void {
+        pub fn test_mw2(ctx: *Context, next: *const NextFn) anyerror!void {
             try next(ctx);
         }
 
-        pub fn test_foo(ctx: *const Context) anyerror!void {
+        pub fn test_foo(ctx: *Context) anyerror!void {
             _ = ctx;
         }
 
-        pub fn test_bar(ctx: *const Context, n: u256) anyerror!void {
+        pub fn test_bar(ctx: *Context, n: u256) anyerror!void {
             try std.testing.expectEqual(@as(u256, 42), n);
             try std.testing.expectEqual(@as(u256, 69), ctx.block.number);
         }
@@ -761,7 +835,6 @@ test "router middleware and bar decoding" {
         .allocator = allocator,
         .block = .{ .number = 69 },
         .calldata = &calldata,
-        .return_data = &.{},
     };
 
     const routes = comptime [_]Route{
@@ -769,12 +842,13 @@ test "router middleware and bar decoding" {
         Route.init("bar", .{ Contract.test_mw, Contract.test_mw2 }, Contract.test_bar),
     };
 
-    try Router.handle(&routes, &ctx);
+    const result = Router.handle(&routes, &ctx);
+    try std.testing.expectEqual(@as(i32, 0), result);
 }
 
 test "router invalid calldata" {
     const Contract = struct {
-        pub fn foo(ctx: *const Context) void {
+        pub fn foo(ctx: *Context) void {
             _ = ctx;
         }
     };
@@ -789,12 +863,12 @@ test "router invalid calldata" {
         .allocator = allocator,
         .block = .{ .number = 69 },
         .calldata = &calldata,
-        .return_data = &.{},
     };
 
     const routes = comptime [_]Route{
         Route.init("foo", .{}, Contract.foo),
     };
 
-    try std.testing.expectError(error.InvalidCalldata, Router.handle(&routes, &ctx));
+    const result = Router.handle(&routes, &ctx);
+    try std.testing.expectEqual(@as(i32, 1), result);
 }

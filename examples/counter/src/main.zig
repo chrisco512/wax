@@ -7,7 +7,9 @@ const Router = wax.Router;
 const Context = wax.Context;
 const NextFn = wax.NextFn;
 
-fn mw(ctx: *const Context, next: *const NextFn) anyerror!void {
+count: u256,
+
+fn mw(ctx: *Context, next: *const NextFn) anyerror!void {
     if (builtin.is_test) {
         std.debug.print("in the mw\n", .{});
     }
@@ -15,7 +17,7 @@ fn mw(ctx: *const Context, next: *const NextFn) anyerror!void {
     try next(ctx);
 }
 
-fn mw2(ctx: *const Context, next: *const NextFn) anyerror!void {
+fn mw2(ctx: *Context, next: *const NextFn) anyerror!void {
     if (builtin.is_test) {
         std.debug.print("in mw2, woo!\n", .{});
     }
@@ -23,7 +25,7 @@ fn mw2(ctx: *const Context, next: *const NextFn) anyerror!void {
     try next(ctx);
 }
 
-fn foo(ctx: *const Context) void {
+fn foo(ctx: *Context) !void {
     _ = ctx;
 
     if (builtin.is_test) {
@@ -31,7 +33,7 @@ fn foo(ctx: *const Context) void {
     }
 }
 
-fn bar(ctx: *const Context, n: u256) u256 {
+fn bar(ctx: *Context, n: u256) !u256 {
     _ = n;
 
     if (builtin.is_test) {
@@ -50,28 +52,29 @@ export fn user_entrypoint(len: usize) i32 {
         Route.init("bar", .{ mw, mw2 }, bar),
     };
 
-    if (Router.handle(&routes, &ctx)) |_| {
-        return 0;
-    } else |_| {
-        return 1;
-    }
+    return Router.handle(&routes, &ctx);
 }
 
 // Test setup
 test "user_entrypoint with bar" {
     // Mock calldata: selector for "bar" + u256 argument (42)
     const selector = comptime wax.getSelector("bar", bar);
+    std.debug.print("Computed selector: 0x{x}\n", .{selector});
+    // const selector_bytes = [_]u8{ 0xc2, 0x98, 0x55, 0x78 }; // Hardcoded for now
     const selector_bytes = [_]u8{
         @intCast((selector >> 24) & 0xFF),
         @intCast((selector >> 16) & 0xFF),
         @intCast((selector >> 8) & 0xFF),
         @intCast(selector & 0xFF),
     };
+
     var arg_bytes = [_]u8{0} ** 32;
     arg_bytes[31] = 42;
     var calldata: [36]u8 = undefined;
     @memcpy(calldata[0..4], &selector_bytes);
     @memcpy(calldata[4..36], &arg_bytes);
+
+    std.debug.print("Calldata[0..4]: {x}\n", .{calldata[0..4]}); // Verify selector
 
     // Mock hooks
     const MockHooks = struct {
