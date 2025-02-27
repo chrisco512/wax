@@ -315,3 +315,6 @@ pub extern "vm_hooks" fn tx_ink_price() u32;
 ///
 /// [`ORIGIN`]: https://www.evm.codes/#32
 pub extern "vm_hooks" fn tx_origin(origin: *u8) void;
+
+/// Prints a UTF-8 encoded string to the console. Only available in debug mode.
+pub extern "console" fn log_txt(text: *const u8, len: usize) void;
