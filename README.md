@@ -1,7 +1,7 @@
+<img src="Douris_Man_with_wax_tablet.jpg" height="250" alt="Wax tablet">
+
 # Wax
 A simple, zero-dependency smart contract framework for Arbitrum Stylus, written in Zig
-
-<img src="Douris_Man_with_wax_tablet.jpg" width="300" alt="Wax tablet">
 
 ## Philosophy
 
