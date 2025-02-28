@@ -11,6 +11,8 @@ pub const NotOwner = struct {
     owner: Address,
 };
 
+pub const RawRevert = struct {};
+
 pub const store = struct {
     count: u256,
     owner: Address,
@@ -21,6 +23,15 @@ fn onlyOwner(ctx: *Context(store), next: *const Router(store).NextFn) !void {
     const owner = ctx.store.owner.get();
     if (sender != owner) try ctx.revert(NotOwner, .{ .requester = sender, .owner = owner });
     try next(ctx);
+}
+
+fn claimOwnership(ctx: *Context(store)) !void {
+    const current_owner = ctx.store.owner.get();
+    const sender = ctx.msg_sender();
+    if (current_owner != 0) {
+        try ctx.revert(NotOwner, .{ .requester = sender, .owner = current_owner });
+    }
+    ctx.store.owner.set(sender);
 }
 
 fn increment(ctx: *Context(store)) !void {
@@ -38,7 +49,8 @@ export fn user_entrypoint(len: usize) i32 {
 
     const routes = comptime [_]Router(store).Route{
         Router(store).Route.init("count", .{}, count),
-        Router(store).Route.init("increment", .{}, increment),
+        Router(store).Route.init("increment", .{onlyOwner}, increment),
+        Router(store).Route.init("claimOwnership", .{}, claimOwnership),
     };
 
     return Router(store).handle(&routes, &ctx);

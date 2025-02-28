@@ -53,9 +53,9 @@ pub fn Context(comptime UserStore: type) type {
 
         pub fn msg_sender(self: *@This()) Address {
             _ = self;
-            var sender: [32]u8 = undefined;
+            var sender: [20]u8 = undefined;
             host.msg_sender(&sender[0]);
-            return std.mem.readInt(u160, sender[12..32], .big);
+            return std.mem.readInt(u160, sender[0..], .big);
         }
     };
 }

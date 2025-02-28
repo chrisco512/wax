@@ -71,11 +71,13 @@ fn encode(value: anytype, dest: *[32]u8) void {
     const T = @TypeOf(value);
     switch (T) {
         bool => {
-            std.mem.set(u8, dest[0..31], 0);
+            // std.mem.set(u8, dest[0..31], 0);
+            @memset(dest, 0);
             dest[31] = if (value) 1 else 0;
         },
         Address => {
-            std.mem.set(u8, dest[0..12], 0);
+            // std.mem.set(u8, dest[0..12], 0);
+            @memset(dest, 0);
             std.mem.writeInt(u160, dest[12..32], value, .big);
         },
         else => switch (@typeInfo(T)) {
