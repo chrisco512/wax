@@ -1,0 +1,10 @@
+.{
+    .name = "counter",
+    .version = "0.0.1",
+    .paths = .{"."},
+    .dependencies = .{
+        .wax = .{
+            .path = "../../",
+        },
+    },
+}
