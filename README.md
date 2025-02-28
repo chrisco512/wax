@@ -1,3 +1,5 @@
+<img src="1024px-Table_with_was_and_stylus_Roman_times.jp" width="300" height="200" alt="Wax tablet">
+
 # Wax
 A simple, zero-dependency smart contract framework for Arbitrum Stylus, written in Zig
 
