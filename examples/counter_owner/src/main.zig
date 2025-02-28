@@ -32,7 +32,9 @@ pub const NotOwner = struct {
 fn onlyOwner(ctx: *Context, next: *const NextFn) !void {
     const sender = ctx.msg_sender();
     const current_owner = ctx.store.owner.get();
-    if (sender != current_owner) try ctx.revert(NotOwner, .{ .requester = sender, .owner = current_owner });
+    if (sender != current_owner) {
+        try ctx.revert(NotOwner, .{ .requester = sender, .owner = current_owner });
+    }
     try next(ctx);
 }
 
@@ -59,6 +61,7 @@ fn count(ctx: *Context) !u256 {
     return ctx.store.count.get();
 }
 
+// Returns 0 if success, 1 if failure
 export fn user_entrypoint(len: usize) i32 {
     var ctx = Context.init(len) catch return 1;
     defer ctx.deinit();
