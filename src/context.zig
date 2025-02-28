@@ -10,8 +10,6 @@ const Address = @import("types.zig").Address;
 // Plus access to storage via Context.store
 // TODO: Need to think more about which fields here are mutable/immutable
 // and how to protect certain values
-// also, it may be possible to revert & @trap instead of worrying about propagating
-// error up
 pub fn Context(comptime UserStore: type) type {
     return struct {
         allocator: std.mem.Allocator,
