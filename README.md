@@ -32,6 +32,30 @@ Navigate to examples/counter and run `zig build`. It will produce a `main.wasm` 
 > cargo stylus deploy --no-verify --endpoint $RPC --private-key $PRIVATE_KEY --wasm-file=main.wasm
 ```
 
+It will produce output similar to:
+
+```bash
+stripped custom section from user wasm to remove any sensitive data
+contract size: 1.4 KB
+  deployed code at address: 0x1bac7c33af7313d0ac112a3c7bbc3314fc181ef7                                                                     deployment tx hash: 0x9ec6bb6672fe3c6141390b77688290f4202c73a5e2c88fc2acd0f6efc429db64                                                   wasm already activated!
+```
+
+Although your contract address and tx hash will be different. Set the contract address to a local variable:
+
+```bash
+> CONTRACT=0x1bac7c33af7313d0ac112a3c7bbc3314fc181ef7
+```
+
+Then, using Foundry's `cast` (https://getfoundry.sh/), invoke the smart contract's `count` and `increment` methods:
+
+```bash
+❯ cast call --rpc-url $RPC --private-key $PRIVATE_KEY $CONTRACT "count()(uint256)"
+0
+❯ cast send --rpc-url $RPC --private-key $PRIVATE_KEY $CONTRACT "increment()()"
+❯ cast call --rpc-url $RPC --private-key $PRIVATE_KEY $CONTRACT "count()(uint256)"
+1
+```
+
 ## Notice
 
 This code is still in early-stage development and should not be used in production.
