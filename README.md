@@ -1,4 +1,4 @@
-<img src="Douris_Man_with_wax_tablet.jpg" width="300" height="200" alt="Wax tablet">
+<img src="Douris_Man_with_wax_tablet.jpg" width="300" alt="Wax tablet">
 
 # Wax
 A simple, zero-dependency smart contract framework for Arbitrum Stylus, written in Zig
