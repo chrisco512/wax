@@ -11,3 +11,7 @@ A simple, zero-dependency smart contract framework for Arbitrum Stylus, written 
 - Avoid esoteric language features wherever possible
 - Stick with basic building blocks as much as possible: functions, structs, arrays, enums
 - Easily testable
+
+## Notice
+
+This code is still in early-stage development and should not be used in production.
