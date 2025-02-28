@@ -1,12 +1,12 @@
 const wax = @import("wax");
 
-pub const store = struct {
-    count: u256,
-};
-
 const Context = wax.Context(store);
 const Router = wax.Router(store);
 const Route = Router.Route;
+
+const store = struct {
+    count: u256,
+};
 
 fn increment(ctx: *Context) !void {
     const current = ctx.store.count.get();

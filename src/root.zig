@@ -168,41 +168,6 @@ pub fn hashAtComptime(comptime data: []const u8) [32]u8 {
     }
 }
 
-// pub const NextFn = fn (*Context) anyerror!void;
-// pub const MiddlewareFn = fn (ctx: *Context, next: *const NextFn) anyerror!void;
-
-// Routes define public methods for the smart contract
-// Any number of middleware functions can be chained before the
-// handler is invoked.
-// pub const Route = struct {
-//     selector: u32,
-//     handler: *const NextFn,
-//     middleware: []*const MiddlewareFn,
-//
-//     pub fn init(comptime name: []const u8, comptime middleware: anytype, comptime handler: anytype) Route {
-//         // Encodes the selector according to Solidity ABI
-//         const selector = getSelector(name, handler);
-//
-//         // Builds an array of middleware functions for this route
-//         const mws = comptime blk: {
-//             var mw_arr: [middleware.len]*const MiddlewareFn = undefined;
-//             for (middleware, 0..) |mw, i| {
-//                 mw_arr[i] = &mw;
-//             }
-//             break :blk mw_arr;
-//         };
-//
-//         // This wraps the handler in a decoder/encoder for Solidity compatibility
-//         const decodeHandler = returnDecodingFunction(handler);
-//
-//         return Route{
-//             .selector = selector,
-//             .handler = &decodeHandler,
-//             .middleware = @constCast(mws[0..]),
-//         };
-//     }
-// };
-
 // Returns a tuple of types for the parameters of a function
 // We need this type to build the args tuple for the handler
 pub fn getParamsType(comptime handler: anytype) type {
@@ -272,11 +237,6 @@ pub fn decodeAndCallHandler(comptime UserStore: type, comptime handler: anytype,
                     ctx.returndata = &.{};
                 }
             } else |_| {
-                // Error case: encode the error and set revertdata
-                // var buffer = std.ArrayList(u8).init(ctx.allocator);
-                // defer buffer.deinit();
-                // try encodeCustomError(@typeInfo(eu.error_set), err, &buffer);
-                // ctx.revertdata = try buffer.toOwnedSlice();
                 return error.Revert; // Trigger the revert
             }
         },
@@ -293,42 +253,6 @@ pub fn decodeAndCallHandler(comptime UserStore: type, comptime handler: anytype,
         },
     }
 }
-
-// pub fn decodeAndCallHandler(comptime UserStore: type, comptime handler: anytype, ctx: *Context(UserStore)) !void {
-//     if (@typeInfo(@TypeOf(handler)) != .@"fn") {
-//         @compileError("Expected a function, but got " ++ @typeName(@TypeOf(handler)));
-//     }
-//
-//     const handler_type_info = @typeInfo(@TypeOf(handler)).@"fn";
-//     const args = try decodeHandlerArgs(UserStore, handler, ctx);
-//
-//     // Call the handler and capture the return value
-//     const result = @call(.auto, handler, args);
-//
-//     // Encode the return value into ctx.returndata
-//     // and write to write_result
-//     if (handler_type_info.return_type) |ReturnType| {
-//         if (ReturnType != void and ReturnType != !void) {
-//             var buffer = std.ArrayList(u8).init(ctx.allocator);
-//             defer buffer.deinit();
-//
-//             // Strips out error set from return type if necessary
-//             switch (@typeInfo(ReturnType)) {
-//                 .error_union => |eu| {
-//                     const payload_result = try result;
-//                     try encodeByType(eu.payload, payload_result, &buffer);
-//                 },
-//                 else => try encodeByType(ReturnType, result, &buffer),
-//             }
-//
-//             ctx.returndata = try buffer.toOwnedSlice();
-//         } else {
-//             const empty_array: [0]u8 = .{};
-//             const empty_slice: []u8 = &empty_array;
-//             ctx.returndata = empty_slice;
-//         }
-//     }
-// }
 
 pub fn decodeByType(comptime T: type, ctx: *const Context, index: *usize) !T {
     const bytes = ctx.calldata;
@@ -529,66 +453,6 @@ pub fn encodeByType(comptime T: type, value: T, buffer: *std.ArrayList(u8)) !voi
     }
 }
 
-// Container for all public routes. Exposes a handle method which
-// chooses the proper Route and chain calls all middleware functions
-// before invoking the handler.
-// pub const Router = struct {
-//     fn buildChain(comptime r: Route) *const NextFn {
-//         comptime {
-//             // Start with the handler
-//             var next: *const NextFn = r.handler;
-//
-//             // Build middleware chain in reverse order
-//             var i = r.middleware.len;
-//             while (i > 0) : (i -= 1) {
-//                 const middleware = r.middleware[i - 1];
-//                 const next_middleware = next;
-//                 const wrapper = struct {
-//                     fn wrapped(ctx: *Context) anyerror!void {
-//                         try middleware(ctx, next_middleware);
-//                     }
-//                 }.wrapped;
-//                 next = &wrapper;
-//             }
-//
-//             return next;
-//         }
-//     }
-//
-//     pub fn handle(comptime routes: []const Route, ctx: *Context) i32 {
-//         // NOTE: Change this for fallback use case
-//         if (ctx.calldata.len < 4) {
-//             return 1;
-//         }
-//
-//         const selector = std.mem.readInt(u32, ctx.calldata[0..4], .big);
-//
-//         if (builtin.is_test) {
-//             std.debug.print("Received selector: 0x{x}\n", .{selector});
-//         }
-//
-//         inline for (routes) |route| {
-//             if (route.selector == selector) {
-//                 const chain = comptime buildChain(route);
-//
-//                 if (chain(ctx)) |_| {
-//                     if (ctx.returndata) |data| {
-//                         host.write_result(&data.ptr[0], data.len);
-//                     }
-//                     return 0;
-//                 } else |_| {
-//                     if (ctx.revertdata) |data| {
-//                         host.write_result(&data.ptr[0], data.len);
-//                     }
-//                     return 1;
-//                 }
-//             }
-//         }
-//
-//         return 1;
-//     }
-// };
-
 pub fn Router(comptime UserStore: type) type {
     return struct {
         pub const NextFn = fn (*Context(UserStore)) anyerror!void;
@@ -639,27 +503,11 @@ pub fn Router(comptime UserStore: type) type {
                     const chain = comptime buildChain(route);
                     if (chain(ctx)) |_| {
                         if (ctx.returndata) |data| {
-                            // DEBUG INFO
-                            var buffer: [64]u8 = undefined;
-                            const formatted = std.fmt.bufPrint(&buffer, "returning data len: {any}", .{data.len}) catch {
-                                return 1;
-                            };
-                            host.log_txt(@ptrCast(formatted), formatted.len);
-                            // END DEBUG INFO
-
                             if (data.len > 0)
                                 host.write_result(@ptrCast(data), data.len);
                         }
                         return 0;
                     } else |_| {
-                        // DEBUG INFO
-                        var buffer: [64]u8 = undefined;
-                        const formatted = std.fmt.bufPrint(&buffer, "returning revert data", .{}) catch {
-                            return 1;
-                        };
-                        host.log_txt(@ptrCast(formatted), formatted.len);
-                        // END DEBUG INFo
-
                         if (ctx.revertdata) |data| {
                             if (data.len > 0)
                                 host.write_result(&data.ptr[0], data.len);
