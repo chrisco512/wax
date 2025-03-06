@@ -1,6 +1,7 @@
 .{
-    .name = "wax",
+    .name = .wax,
     .version = "0.0.1",
     .dependencies = .{},
     .paths = .{"."},
+    .fingerprint = 0x8cc7042ffd23909e,
 }
