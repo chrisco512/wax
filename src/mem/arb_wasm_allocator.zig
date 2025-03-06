@@ -1,6 +1,5 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const host = @import("../hostio.zig");
 const Allocator = std.mem.Allocator;
 const mem = std.mem;
 const assert = std.debug.assert;
@@ -9,18 +8,15 @@ const math = std.math;
 
 // Instead of the built-in, @wasmMemoryGrow function, Stylus programs need to grow their memory
 // via an external import called memory_grow from a group called vm_hooks.
-// pub extern "vm_hooks" fn pay_for_memory_grow(len: u32) void;
+pub extern "vm_hooks" fn pay_for_memory_grow(len: u32) void;
 
 comptime {
     if (!builtin.target.isWasm()) {
-        @compileError("only available for wasm32 arch");
-    }
-    if (!builtin.single_threaded) {
-        @compileError("TODO implement support for multi-threaded wasm");
+        @compileError("WasmPageAllocator is only available for wasm32 arch");
     }
 }
 
-pub const vtable: Allocator.VTable = .{
+pub const vtable = Allocator.VTable{
     .alloc = alloc,
     .resize = resize,
     .remap = remap,
@@ -45,15 +41,15 @@ const size_class_count = math.log2(bigpage_size) - min_class;
 const big_size_class_count = math.log2(bigpage_count);
 
 var next_addrs: [size_class_count]usize = @splat(0);
-/// For each size class, points to the freed pointer.
 var frees: [size_class_count]usize = @splat(0);
-/// For each big size class, points to the freed pointer.
 var big_frees: [big_size_class_count]usize = @splat(0);
+var current_memory_addr: usize = wasm.page_size;
 
 fn alloc(ctx: *anyopaque, len: usize, alignment: mem.Alignment, return_address: usize) ?[*]u8 {
     _ = ctx;
     _ = return_address;
     // Make room for the freelist next pointer.
+    // const alignment = @as(usize, 1) << @intCast(log2_align);
     const actual_len = @max(len +| @sizeOf(usize), alignment.toByteUnits());
     const slot_size = math.ceilPowerOfTwo(usize, actual_len) catch return null;
     const class = math.log2(slot_size) - min_class;
@@ -83,7 +79,18 @@ fn alloc(ctx: *anyopaque, len: usize, alignment: mem.Alignment, return_address: 
         return @ptrFromInt(addr);
     }
     const bigpages_needed = bigPagesNeeded(actual_len);
-    return @ptrFromInt(allocBigPages(bigpages_needed));
+    const addr = allocBigPages(bigpages_needed);
+    return @ptrFromInt(addr);
+}
+
+fn remap(
+    context: *anyopaque,
+    memory: []u8,
+    alignment: mem.Alignment,
+    new_len: usize,
+    return_address: usize,
+) ?[*]u8 {
+    return if (resize(context, memory, alignment, new_len, return_address)) memory.ptr else null;
 }
 
 fn resize(
@@ -114,14 +121,9 @@ fn resize(
     }
 }
 
-fn remap(
-    context: *anyopaque,
-    memory: []u8,
-    alignment: mem.Alignment,
-    new_len: usize,
-    return_address: usize,
-) ?[*]u8 {
-    return if (resize(context, memory, alignment, new_len, return_address)) memory.ptr else null;
+inline fn compute_vtable_lookups(ctx: *anyopaque, buf: []u8) void {
+    _ = buf;
+    _ = ctx;
 }
 
 fn free(
@@ -168,16 +170,8 @@ fn allocBigPages(n: usize) usize {
         return top_free_ptr;
     }
 
-    // const page_index = @wasmMemoryGrow(0, pow2_pages * pages_per_bigpage);
-    // if (page_index == -1) return 0;
-    // return @as(usize, @intCast(page_index)) * wasm.page_size;
-
-    host.pay_for_memory_grow(pow2_pages * pages_per_bigpage);
-    const addr = wasm.page_size;
+    pay_for_memory_grow(pow2_pages * pages_per_bigpage);
+    const addr = current_memory_addr;
+    current_memory_addr = slot_size_bytes + current_memory_addr;
     return addr;
 }
-
-pub const allocator = std.mem.Allocator{
-    .ptr = undefined,
-    .vtable = &vtable,
-};

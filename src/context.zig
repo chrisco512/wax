@@ -21,7 +21,7 @@ pub fn Context(comptime UserStore: type) type {
 
         pub fn init(calldata_len: usize) !@This() {
             const allocator = blk: {
-                if (builtin.target.isWasm()) break :blk arb_wasm_allocator;
+                if (builtin.target.cpu.arch == .wasm32) break :blk arb_wasm_allocator;
                 if (builtin.is_test) break :blk std.testing.allocator;
                 @compileError("Invalid target, no allocator found.");
             };
