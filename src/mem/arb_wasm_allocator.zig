@@ -11,8 +11,11 @@ const math = std.math;
 pub extern "vm_hooks" fn pay_for_memory_grow(len: u32) void;
 
 comptime {
-    if (!builtin.target.isWasm()) {
+    if (builtin.target.cpu.arch != .wasm32) {
         @compileError("WasmPageAllocator is only available for wasm32 arch");
+    }
+    if (!builtin.single_threaded) {
+        @compileError("TODO implement support for multi-threaded wasm");
     }
 }
 
