@@ -2,6 +2,8 @@ const wax = @import("wax");
 
 const Context = wax.Context(store);
 const Router = wax.Router(store);
+const StylusContract = wax.StylusContract;
+const InitConfig = wax.StaticInitConfig;
 const Route = Router.Route;
 
 const store = struct {
@@ -9,6 +11,8 @@ const store = struct {
 };
 
 const Counter = struct {
+    pub usingnamespace StylusContract(Context, Router, routes);
+
     const routes = [_]Route{
         Route.init("count", .{}, count),
         Route.init("increment", .{}, increment),
@@ -22,14 +26,8 @@ const Counter = struct {
     fn count(ctx: *Context) !u256 {
         return ctx.store.count.get();
     }
-
-    pub export fn entrypoint(len: usize) i32 {
-        var ctx = Context.init(len) catch return 1;
-        defer ctx.deinit();
-
-        return Router.handle(&routes, &ctx);
-    }
 };
+
 comptime {
-    @export(&Counter.entrypoint, .{ .name = "user_entrypoint", .linkage = .strong });
+    @export(&Counter.entrypoint, InitConfig);
 }

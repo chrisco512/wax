@@ -3,13 +3,14 @@ const builtin = @import("builtin");
 const crypto = std.crypto;
 const context = @import("context.zig");
 const host = @import("hostio.zig");
-
+const entrypoint_module = @import("entrypoint.zig");
 // Context
 pub const Context = context.Context;
 
 // Types
 pub const types = @import("types.zig");
 pub const Address = types.Address;
+pub const StaticInitConfig: std.builtin.ExportOptions = .{ .name = "user_entrypoint", .linkage = .strong };
 
 const ABI_SLOT_SIZE = 32;
 
@@ -17,15 +18,9 @@ pub const WaxError = error{
     Revert,
 };
 
-pub fn StylusContract(comptime Self: type, context: *Context, router: type) type {
-    return struct {
-        pub export fn entrypoint(len: usize) i32 {
-            var ctx = context.init(len) catch return 1;
-            defer ctx.deinit();
-
-            return Router.handle(&routes, &ctx);
-        }
-    };
+pub fn StylusContract(comptime ContextType: type, comptime RouterType: type, comptime routes: anytype) type {
+    // Todo: add more features here that needs to init or check during compiling
+    return entrypoint_module.createEntrypoint(ContextType, RouterType, routes);
 }
 
 // Converts a Zig type to a Solidity ABI type string
