@@ -26,11 +26,12 @@ pub fn build(b: *Build) !void {
         .symbol_name = "user_entrypoint",
     };
 
+    // exe.entry = .disabled;
+
     b.installArtifact(exe);
 
     // Tests
     const test_target = b.standardTargetOptions(.{});
-    
 
     const test_module = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),

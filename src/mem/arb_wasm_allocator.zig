@@ -178,3 +178,8 @@ fn allocBigPages(n: usize) usize {
     current_memory_addr = slot_size_bytes + current_memory_addr;
     return addr;
 }
+
+pub const allocator = std.mem.Allocator{
+    .ptr = undefined,
+    .vtable = &vtable,
+};

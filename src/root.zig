@@ -17,6 +17,17 @@ pub const WaxError = error{
     Revert,
 };
 
+pub fn StylusContract(comptime Self: type, context: *Context, router: type) type {
+    return struct {
+        pub export fn entrypoint(len: usize) i32 {
+            var ctx = context.init(len) catch return 1;
+            defer ctx.deinit();
+
+            return Router.handle(&routes, &ctx);
+        }
+    };
+}
+
 // Converts a Zig type to a Solidity ABI type string
 pub fn zigToSolidityType(comptime T: type) []const u8 {
     // special case for address to avoid u160 ambiguity
