@@ -29,12 +29,12 @@ pub fn createContract(comptime ContractType: fn (type) type, comptime Middleware
 
     const EmptyMiddleware = struct {};
 
-    const contractWithContext = ContractType(ContextType);
-    const middlewareWithContextAndNext = if (MiddlewareType) |MT|
+    const ContractWithContext = ContractType(ContextType);
+    const MiddlewareWithContextAndNext = if (MiddlewareType) |MT|
         MT(ContextType, RouterType.NextFn)
     else
         EmptyMiddleware;
 
-    const routes = RouterType.autoGenerateRoutes(contractWithContext, middlewareWithContextAndNext);
+    const routes = RouterType.autoGenerateRoutes(ContractWithContext, MiddlewareWithContextAndNext);
     return createEntrypoint(ContextType, RouterType, routes);
 }
