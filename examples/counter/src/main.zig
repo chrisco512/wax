@@ -20,5 +20,6 @@ pub fn Counter(Context: type) type {
 }
 
 comptime {
-    @export(&wax.createContract(Counter, null, store).entrypoint, InitConfig);
+    const contract = wax.createContract(Counter, null, store);
+    @export(&contract.entrypoint, InitConfig);
 }

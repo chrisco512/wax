@@ -59,5 +59,6 @@ pub fn CounterOwner(Context: type) type {
 }
 
 comptime {
-    @export(&wax.createContract(CounterOwner, Middleware, store).entrypoint, InitConfig);
+    const contract = wax.createContract(CounterOwner, Middleware, store);
+    @export(&contract.entrypoint, InitConfig);
 }

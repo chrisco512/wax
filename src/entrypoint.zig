@@ -23,7 +23,7 @@ pub fn createEntrypoint(
         }
     };
 }
-// Modified createContract function to use type adaptation system
+// Thia method will add context to the contract and middleware, and return the entrypoint
 pub fn createContract(comptime ContractType: fn (type) type, comptime MiddlewareType: ?fn (type, type) type, comptime StoreType: type) type {
     const RouterType = Router(StoreType);
     const ContextType = Context(StoreType);
