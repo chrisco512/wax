@@ -26,8 +26,6 @@ pub fn build(b: *Build) !void {
         .symbol_name = "user_entrypoint",
     };
 
-    // exe.entry = .disabled;
-
     b.installArtifact(exe);
 
     // Tests

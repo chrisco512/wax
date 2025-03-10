@@ -104,7 +104,6 @@ pub fn Router(comptime UserStore: type) type {
 
                         if (@typeInfo(field_type) == .@"fn") {
                             const func = @typeInfo(field_type).@"fn";
-                            // @compileLog("fn: {}", field_type);
 
                             if (func.params.len == 1 and func.return_type != null) {
                                 if (decl.name.len > 0 and decl.name[0] != '_') {
@@ -132,7 +131,6 @@ pub fn Router(comptime UserStore: type) type {
 
                                 // process middlewares...
                                 const attr_name = route_name ++ "_route";
-                                // @compileLog("Got name: {}", attr_name);
                                 if (@hasDecl(ContractType, attr_name)) {
                                     const attr = @field(ContractType, attr_name);
                                     if (@hasField(@TypeOf(attr), "middlewares")) {
@@ -188,7 +186,6 @@ pub fn Router(comptime UserStore: type) type {
 
                     if (@typeInfo(middleware_type) == .@"fn") {
                         const func_info = @typeInfo(middleware_type).@"fn";
-                        // @compileLog("Got func_info: {}", func_info.params);
                         // Verify middleware has exactly 2 parameters
                         if (func_info.params.len < 2) {
                             @compileError("Middleware function '" ++ name ++ "' must take more 2 parameters (at least *Context and next)");

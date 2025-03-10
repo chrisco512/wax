@@ -2,8 +2,6 @@ const std = @import("std");
 const builtin = @import("builtin");
 const wax = @import("wax");
 
-const StylusContract = wax.StylusContract;
-const StylusContractTest = wax.StylusContractTest;
 const InitConfig = wax.StaticInitConfig;
 
 const Address = wax.Address;
@@ -61,6 +59,5 @@ pub fn CounterOwner(Context: type) type {
 }
 
 comptime {
-    // const entrypoint = wax.createContract(CounterOwner, Middleware, store).entrypoint;
     @export(&wax.createContract(CounterOwner, Middleware, store).entrypoint, InitConfig);
 }

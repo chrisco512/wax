@@ -1,6 +1,5 @@
 const wax = @import("wax");
 
-const StylusContract = wax.StylusContract;
 const InitConfig = wax.StaticInitConfig;
 
 const store = struct {
