@@ -104,11 +104,8 @@ pub fn Router(comptime UserStore: type) type {
 
                         if (@typeInfo(field_type) == .@"fn") {
                             const func = @typeInfo(field_type).@"fn";
-
-                            if (func.params.len == 1 and func.return_type != null) {
-                                if (decl.name.len > 0 and decl.name[0] != '_') {
-                                    route_count += 1;
-                                }
+                            if (func.params.len >= 1 and decl.name.len > 0) {
+                                route_count += 1;
                             }
                         }
                     }

@@ -14,7 +14,6 @@ pub fn createEntrypoint(
     comptime routes: anytype,
 ) type {
     return struct {
-        // const stored_routes = routes;
         pub fn entrypoint(len: usize) callconv(.C) i32 {
             var ctx = ContextType.init(len) catch return 1;
             defer ctx.deinit();
