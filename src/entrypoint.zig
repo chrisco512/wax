@@ -1,14 +1,41 @@
+const context = @import("context.zig");
+const host = @import("hostio.zig");
+const router = @import("router.zig");
+const std = @import("std");
+
+// Context
+pub const Context = context.Context;
+pub const Router = router.Router;
+const Route = Router.Route;
+
 pub fn createEntrypoint(
     comptime ContextType: type,
     comptime RouterType: type,
     comptime routes: anytype,
 ) type {
     return struct {
+        // const stored_routes = routes;
         pub fn entrypoint(len: usize) callconv(.C) i32 {
             var ctx = ContextType.init(len) catch return 1;
             defer ctx.deinit();
 
-            return RouterType.handle(&routes, &ctx);
+            return RouterType.handle(routes, &ctx);
         }
     };
+}
+// Modified createContract function to use type adaptation system
+pub fn createContract(comptime ContractType: fn (type) type, comptime MiddlewareType: ?fn (type, type) type, comptime StoreType: type) type {
+    const RouterType = Router(StoreType);
+    const ContextType = Context(StoreType);
+
+    const EmptyMiddleware = struct {};
+
+    const contractWithContext = ContractType(ContextType);
+    const middlewareWithContextAndNext = if (MiddlewareType) |MT|
+        MT(ContextType, RouterType.NextFn)
+    else
+        EmptyMiddleware;
+
+    const routes = RouterType.autoGenerateRoutes(contractWithContext, middlewareWithContextAndNext);
+    return createEntrypoint(ContextType, RouterType, routes);
 }

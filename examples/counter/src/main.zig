@@ -1,33 +1,25 @@
 const wax = @import("wax");
 
-const Context = wax.Context(store);
-const Router = wax.Router(store);
 const StylusContract = wax.StylusContract;
 const InitConfig = wax.StaticInitConfig;
-const Route = Router.Route;
 
 const store = struct {
     count: u256,
 };
 
-const Counter = struct {
-    pub usingnamespace StylusContract(Context, Router, routes);
+pub fn Counter(Context: type) type {
+    return struct {
+        pub fn increment(ctx: *Context) !void {
+            const current = ctx.store.count.get();
+            ctx.store.count.set(current + 1);
+        }
 
-    const routes = [_]Route{
-        Route.init("count", .{}, count),
-        Route.init("increment", .{}, increment),
+        pub fn count(ctx: *Context) !u256 {
+            return ctx.store.count.get();
+        }
     };
-
-    fn increment(ctx: *Context) !void {
-        const current = ctx.store.count.get();
-        ctx.store.count.set(current + 1);
-    }
-
-    fn count(ctx: *Context) !u256 {
-        return ctx.store.count.get();
-    }
-};
+}
 
 comptime {
-    @export(&Counter.entrypoint, InitConfig);
+    @export(&wax.createContract(Counter, null, store).entrypoint, InitConfig);
 }
