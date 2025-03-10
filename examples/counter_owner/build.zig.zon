@@ -1,5 +1,5 @@
 .{
-    .name = "counter",
+    .name = .counter,
     .version = "0.0.1",
     .paths = .{"."},
     .dependencies = .{
@@ -7,4 +7,5 @@
             .path = "../../",
         },
     },
+    .fingerprint = 0xc1229478066c4fe9,
 }
