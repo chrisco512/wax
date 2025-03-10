@@ -187,7 +187,6 @@ pub fn getParamsType(comptime handler: anytype) type {
     const ParamsType = blk: {
         comptime var fields: [handler_info.params.len]type = undefined;
         inline for (handler_info.params, 0..) |param, i| {
-            // @compileLog("param type: {}", .{param});
             fields[i] = param.type.?;
         }
         break :blk std.meta.Tuple(&fields);
